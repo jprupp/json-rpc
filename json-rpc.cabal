@@ -14,8 +14,7 @@ cabal-version:          >= 1.10
 library
   exposed-modules:      Network.JsonRpc
   other-modules:        Network.JsonRpc.Data,
-                        Network.JsonRpc.Conduit,
-                        Network.JsonRpc.Arbitrary
+                        Network.JsonRpc.Conduit
   build-depends:        base                        >= 4.6      && < 5,
                         aeson                       >= 0.7.0.5  && < 0.8,
                         async                       >= 2.0      && < 2.1,
@@ -28,16 +27,16 @@ library
                         stm                         >= 2.4      && < 2.5,
                         stm-conduit                 >= 2.4      && < 2.5,
                         text                        >= 1.1      && < 1.2,
-                        unordered-containers        >= 0.2      && < 0.3,
-                        QuickCheck                  >= 2.6      && < 2.7
-  ghc-options:          -Wall
+                        unordered-containers        >= 0.2      && < 0.3
   default-language:     Haskell2010
+  ghc-options:          -Wall
 
 test-suite test-json-rpc
   hs-source-dirs:       test
   type:                 exitcode-stdio-1.0 
   main-is:              main.hs
-  other-modules:        Network.JsonRpc.Tests
+  other-modules:        Network.JsonRpc.Tests,
+                        Network.JsonRpc.Arbitrary
   build-depends:        base                        >= 4.6      && < 5,
                         aeson                       >= 0.7.0.5  && < 0.8,
                         async                       >= 2.0      && < 2.1,
@@ -55,4 +54,5 @@ test-suite test-json-rpc
                         QuickCheck                  >= 2.6      && < 2.7,
                         test-framework              >= 0.8      && < 0.9,
                         test-framework-quickcheck2  >= 0.3      && < 0.4
+  default-language:     Haskell2010
   ghc-options:          -Wall

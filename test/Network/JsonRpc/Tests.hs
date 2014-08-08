@@ -16,6 +16,7 @@ import qualified Data.HashMap.Strict as M
 import Data.Maybe
 import Data.Text (Text)
 import Network.JsonRpc
+import Network.JsonRpc.Arbitrary
 import Test.QuickCheck
 import Test.QuickCheck.Monadic
 import Test.Framework
@@ -43,17 +44,17 @@ tests =
         , testProperty "Bad response id"
             (rpcBadResId :: ReqRes Value Value -> Bool)
         , testProperty "Error response"
-            (rpcErrRes :: (ReqRes Value Value, Error) -> Bool)
+            (rpcErrRes :: (ReqRes Value Value, ErrorObj) -> Bool)
         ]
     , testGroup "JSON-RPC Conduits"
         [ testProperty "Outgoing conduit"
             (newMsgConduit :: [Message Value Value Value] -> Property)
         , testProperty "Decode requests"
-            (decodeReqConduit :: ([Request Value], Bool) -> Property)
+            (decodeReqConduit :: ([Request Value], Ver) -> Property)
         , testProperty "Decode responses" 
-            (decodeResConduit :: ([ReqRes Value Value], Bool) -> Property)
+            (decodeResConduit :: ([ReqRes Value Value], Ver) -> Property)
         , testProperty "Bad responses" 
-            (decodeErrConduit :: ([ReqRes Value Value], Bool) -> Property)
+            (decodeErrConduit :: ([ReqRes Value Value], Ver) -> Property)
         , testProperty "Sending messages" sendMsgNet
         , testProperty "Two-way communication" twoWayNet
         ]
@@ -65,8 +66,8 @@ tests =
 
 reqFields :: (ToRequest a, ToJSON a) => Request a -> Bool
 reqFields rq = case rq of
-    Request1 m p i -> r1ks && vals m p i
-    Request  m p i -> r2ks && vals m p i
+    Request V1 m p i -> r1ks && vals m p i
+    Request V2 m p i -> r2ks && vals m p i
   where
     (Object o) = toJSON rq
     r1ks = sort (M.keys o) == ["id", "method", "params"]
@@ -74,8 +75,8 @@ reqFields rq = case rq of
         || sort (M.keys o) == ["id", "jsonrpc", "method"]
     vals m p i = fromMaybe False $ parseMaybe (f m p i) o
     f m p i _ = do
-        jM <- o .:? "jsonrpc"
-        guard $ fromMaybe True $ fmap (== ("2.0" :: Text)) jM
+        j <- o .:? "jsonrpc"
+        guard $ fromMaybe True $ fmap (== ("2.0" :: Text)) j
         i' <- o .: "id"
         guard $ i == i'
         m' <- o .: "method"
@@ -95,8 +96,8 @@ reqDecode rq = case parseMaybe parseRequest (toJSON rq) of
 
 notifFields :: (ToNotif a, ToJSON a) => Notif a -> Bool
 notifFields rn = case rn of
-    Notif1 m p -> n1ks && vals m p
-    Notif  m p -> n2ks && vals m p
+    Notif V1 m p -> n1ks && vals m p
+    Notif V2 m p -> n2ks && vals m p
   where
     (Object o) = toJSON rn
     n1ks = sort (M.keys o) == ["id", "method", "params"]
@@ -106,8 +107,8 @@ notifFields rn = case rn of
     f m p _ = do
         i <- o .:? "id" .!= Null
         guard $ i == Null
-        jM <- o .:? "jsonrpc"
-        guard $ fromMaybe True $ fmap (== ("2.0" :: Text)) jM
+        j <- o .:? "jsonrpc"
+        guard $ fromMaybe True $ fmap (== ("2.0" :: Text)) j
         m' <- o .: "method"
         guard $ m == m'
         p' <- o .:? "params" .!= Null
@@ -126,8 +127,8 @@ notifDecode rn = case parseMaybe parseNotif (toJSON rn) of
 
 resFields :: (Eq a, ToJSON a, FromJSON a) => Response a -> Bool
 resFields rs = case rs of
-    Response1 s i -> s1ks && vals s i
-    Response  s i -> s2ks && vals s i
+    Response V1 s i -> s1ks && vals s i
+    Response V2 s i -> s2ks && vals s i
   where
     (Object o) = toJSON rs
     s1ks = sort (M.keys o) == ["error", "id", "result"]
@@ -156,17 +157,17 @@ rpcBadResId (ReqRes rq rs) = case parseMaybe f (toJSON rs') of
     Nothing -> True
     _ -> False
   where
-    f :: FromResponse r => Value -> Parser (Either Error (Response r))
+    f :: FromResponse r => Value -> Parser (Either ErrorObj (Response r))
     f = parseResponse rq
     rs' = rs { getResId = IdNull }
 
-rpcErrRes :: forall q r. FromResponse r => (ReqRes q r, Error) -> Bool
+rpcErrRes :: forall q r. FromResponse r => (ReqRes q r, ErrorObj) -> Bool
 rpcErrRes (ReqRes rq _, re) = case parseMaybe f (toJSON re') of
     Nothing -> False
     Just (Left _) -> True
     _ -> False
   where
-    f :: FromResponse r => Value -> Parser (Either Error (Response r))
+    f :: FromResponse r => Value -> Parser (Either ErrorObj (Response r))
     f = parseResponse rq
     re' = re { getErrId = getReqId rq }
 
@@ -194,8 +195,8 @@ newMsgConduit (snds) = monadicIO $ do
         _ -> m
 
 decodeReqConduit :: forall q. (ToRequest q, FromRequest q, Eq q, ToJSON q)
-                 => ([Request q], Bool) -> Property
-decodeReqConduit (vs, r1) = monadicIO $ do
+                 => ([Request q], Ver) -> Property
+decodeReqConduit (vs, ver) = monadicIO $ do
     inmsgs <- run $ do
         qs  <- atomically initSession
         qs' <- atomically initSession
@@ -203,7 +204,7 @@ decodeReqConduit (vs, r1) = monadicIO $ do
             $= CL.map f
             $= msgConduit qs
             $= encodeConduit
-            $= decodeConduit r1 True qs'
+            $= decodeConduit ver True qs'
             $$ CL.consume
     assert $ null $ filter unexpected inmsgs
     assert $ all (uncurry match) (zip vs inmsgs)
@@ -219,8 +220,8 @@ decodeReqConduit (vs, r1) = monadicIO $ do
 decodeResConduit :: forall q r.
                     ( ToRequest q, FromRequest q, Eq q, ToJSON q, ToJSON r
                     , FromResponse r, Eq r )
-                 => ([ReqRes q r], Bool) -> Property
-decodeResConduit (rr, r1) = monadicIO $ do
+                 => ([ReqRes q r], Ver) -> Property
+decodeResConduit (rr, ver) = monadicIO $ do
     inmsgs <- run $ do
         qs  <- atomically initSession
         qs' <- atomically initSession
@@ -228,10 +229,10 @@ decodeResConduit (rr, r1) = monadicIO $ do
             $= CL.map f
             $= msgConduit qs
             $= encodeConduit
-            $= decodeConduit r1 True qs'
+            $= decodeConduit ver True qs'
             $= CL.map respond
             $= encodeConduit
-            $= decodeConduit r1 True qs
+            $= decodeConduit ver True qs
             $$ CL.consume
     assert $ null $ filter unexpected inmsgs
     assert $ all (uncurry match) (zip vs inmsgs)
@@ -258,9 +259,9 @@ decodeResConduit (rr, r1) = monadicIO $ do
 
 decodeErrConduit :: forall q r.
                     ( ToRequest q, FromRequest q, Eq q, ToJSON q, ToJSON r
-                    , FromResponse r, Eq r )
-                 => ([ReqRes q r], Bool) -> Property
-decodeErrConduit (rr, r1) = monadicIO $ do
+                    , FromResponse r, Eq r, Show r, Show q )
+                 => ([ReqRes q r], Ver) -> Property
+decodeErrConduit (vs, ver) = monadicIO $ do
     inmsgs <- run $ do
         qs  <- atomically initSession
         qs' <- atomically initSession
@@ -268,37 +269,35 @@ decodeErrConduit (rr, r1) = monadicIO $ do
             $= CL.map f
             $= msgConduit qs
             $= encodeConduit
-            $= decodeConduit r1 True qs'
+            $= decodeConduit ver True qs'
             $= CL.map respond
             $= encodeConduit
-            $= decodeConduit r1 True qs
+            $= decodeConduit ver True qs
             $$ CL.consume
     assert $ null $ filter unexpected inmsgs
     assert $ all (uncurry match) (zip vs inmsgs)
   where
     unexpected :: IncomingMsg q () () r -> Bool
     unexpected (IncomingMsg (MsgError _) (Just _)) = False
-    unexpected _ = True
+    -- unexpected _ = True
+    unexpected i = error $ show i
 
-    match rq (IncomingMsg (MsgError _) (Just rq')) =
+    match (ReqRes rq _) (IncomingMsg (MsgError _) (Just rq')) =
         rq' { getReqId = getReqId rq } == rq
     match _ _ = False
 
-    respond :: IncomingMsg () q () () -> Error
-    respond (IncomingMsg (MsgRequest (Request  _ _ i)) Nothing) =
-        Error (ErrorObj "test" (getIdInt i) Null) i
-    respond (IncomingMsg (MsgRequest (Request1 _ _ i)) Nothing) =
-        Error1 "test" i
+    respond :: IncomingMsg () q () () -> ErrorObj
+    respond (IncomingMsg (MsgRequest (Request ver' _ _ i)) Nothing) =
+        ErrorObj ver' "test" (getIdInt i) Null i
     respond _ = undefined
 
-    f rq = MsgRequest $ rq { getReqId = IdNull } :: Message q () ()
-    vs = map (\(ReqRes rq _) -> rq) rr
+    f (ReqRes rq _) = MsgRequest $ rq { getReqId = IdNull } :: Message q () ()
 
-type ClientApp a = App Value Value Value () () () IO a
-type ServerApp a = App () () () Value Value Value IO a
+type ClientAppConduits = AppConduits Value Value Value () () () IO
+type ServerAppConduits = AppConduits () () () Value Value Value IO
 
-sendMsgNet :: ([Message Value Value Value], Bool) -> Property
-sendMsgNet (rs, r1) = monadicIO $ do
+sendMsgNet :: ([Message Value Value Value], Ver) -> Property
+sendMsgNet (rs, ver) = monadicIO $ do
     rt <- run $ do
         mv <- newEmptyMVar
         to <- atomically $ newTBMChan 128
@@ -307,58 +306,39 @@ sendMsgNet (rs, r1) = monadicIO $ do
             toSource = sourceTBMChan to
             toSink   = sinkTBMChan to True
             tiSource = sourceTBMChan ti
-        withAsync (srv tiSink toSource mv) $ \_ -> do
-        runConduits r1 False toSink tiSource (cliApp mv)
+        withAsync (srv tiSink toSource mv) $ \_ ->
+            runConduits ver False toSink tiSource (cliApp mv)
     assert $ length rt == length rs
     assert $ all (uncurry match) (zip rs rt)
   where
-    srv tiSink toSource mv = runConduits r1 False tiSink toSource (srvApp mv)
+    srv tiSink toSource mv = runConduits ver False tiSink toSource (srvApp mv)
 
-    srvApp :: MVar [IncomingMsg () Value Value Value] -> ServerApp ()
-    srvApp mv src snk =
+    srvApp :: MVar [IncomingMsg () Value Value Value]
+           -> ServerAppConduits -> IO ()
+    srvApp mv (src, snk) =
         (CL.sourceNull $$ snk) >> (src $$ CL.consume) >>= putMVar mv
 
     cliApp :: MVar [IncomingMsg () Value Value Value]
-           -> ClientApp [IncomingMsg () Value Value Value]
-    cliApp mv src snk =
+           -> ClientAppConduits -> IO [IncomingMsg () Value Value Value]
+    cliApp mv (src, snk) =
         (CL.sourceList rs $$ snk) >> (src $$ CL.sinkNull) >> readMVar mv
 
-    match (MsgRequest rq@(Request _ _ _))
-        (IncomingMsg (MsgRequest rq'@(Request _ _ _)) Nothing) =
+    match (MsgRequest rq) (IncomingMsg (MsgRequest rq') Nothing) =
         rq == rq'
-    match (MsgRequest rq@(Request1 _ _ _))
-        (IncomingMsg (MsgRequest rq'@(Request1 _ _ _)) Nothing) =
-        rq == rq'
-    match (MsgNotif rn@(Notif _ _))
-        (IncomingMsg (MsgNotif rn'@(Notif _ _)) Nothing) =
+    match (MsgNotif rn) (IncomingMsg (MsgNotif rn') Nothing) =
         rn == rn'
-    match (MsgNotif rn@(Notif1 _ _))
-        (IncomingMsg (MsgNotif rn'@(Notif1 _ _)) Nothing) =
-        rn == rn'
-    match (MsgResponse _)
-        (IncomingError (Error1 e _)) =
-        take 17 e == "Id not recognized"
-    match (MsgResponse rs')
-        (IncomingError (Error (ErrorObj _ c i') IdNull)) =
-        toJSON (getResId rs') == i' && c == (-32000)
-    match (MsgError e@(Error1 _ IdNull))
-        (IncomingMsg (MsgError e'@(Error1 _ _)) Nothing) =
-        e == e'
-    match (MsgError e@(Error  _ IdNull))
-        (IncomingMsg (MsgError e'@(Error  _ _)) Nothing) =
-        e == e'
-    match (MsgError _)
-        (IncomingError (Error1 e IdNull)) =
-        take 17 e == "Id not recognized"
-    match (MsgError e)
-        (IncomingError (Error (ErrorObj _ c i') IdNull)) =
-        toJSON (getErrId e) == i' && c == (-32000)
-    match v v' = error $ "Sent: " ++ show v ++ "\n" ++ "Received: " ++ show v'
+    match (MsgResponse _) (IncomingError e) =
+        getErrMsg e == "Id not recognized"
+    match (MsgError e) (IncomingMsg (MsgError e') Nothing) =
+        getErrMsg e == getErrMsg e'
+    match (MsgError _) (IncomingError e) =
+        getErrMsg e == "Id not recognized"
+    match _ _ = False
 
-type TwoWayApp a = App Value Value Value Value Value Value IO a
+type TwoWayAppConduits = AppConduits Value Value Value Value Value Value IO
 
-twoWayNet :: ([Message Value Value Value], Bool) -> Property
-twoWayNet (rr, r1) = monadicIO $ do
+twoWayNet :: ([Message Value Value Value], Ver) -> Property
+twoWayNet (rr, ver) = monadicIO $ do
     rt <- run $ do
         to <- atomically $ newTBMChan 128
         ti <- atomically $ newTBMChan 128
@@ -366,8 +346,8 @@ twoWayNet (rr, r1) = monadicIO $ do
             toSource = sourceTBMChan to
             toSink   = sinkTBMChan to True
             tiSource = sourceTBMChan ti
-        withAsync (srv tiSink toSource) $ \_ -> do
-        runConduits r1 False toSink tiSource cliApp
+        withAsync (srv tiSink toSource) $ \_ ->
+            runConduits ver False toSink tiSource cliApp
     assert $ length rt == length rs
     assert $ all (uncurry match) (zip rs rt)
   where
@@ -375,56 +355,38 @@ twoWayNet (rr, r1) = monadicIO $ do
         f (MsgRequest rq) = MsgRequest $ rq { getReqId = IdNull }
         f m = m
 
-    cliApp :: TwoWayApp [IncomingMsg Value Value Value Value]
-    cliApp src snk = (CL.sourceList rs $$ snk) >> (src $$ CL.consume)
+    cliApp :: TwoWayAppConduits -> IO [IncomingMsg Value Value Value Value]
+    cliApp (src, snk) = (CL.sourceList rs $$ snk) >> (src $$ CL.consume)
 
-    srv tiSink toSource = runConduits r1 False tiSink toSource srvApp
+    srv tiSink toSource = runConduits ver False tiSink toSource srvApp
 
-    srvApp :: TwoWayApp ()
-    srvApp src snk = src $= CL.map respond $$ snk
+    srvApp :: TwoWayAppConduits -> IO ()
+    srvApp (src, snk) = src $= CL.map respond $$ snk
 
     respond (IncomingError e) =
         MsgError e
-    respond (IncomingMsg (MsgRequest (Request _ p i)) _) =
-        MsgResponse (Response p i)
-    respond (IncomingMsg (MsgRequest (Request1 _ p i)) _) =
-        MsgResponse (Response1 p i)
+    respond (IncomingMsg (MsgRequest (Request ver' _ p i)) _) =
+        MsgResponse (Response ver' p i)
     respond (IncomingMsg (MsgNotif rn) _) =
         MsgNotif rn
-    respond (IncomingMsg (MsgError e@(Error _ _)) _) =
-        MsgNotif (Notif "error" (toJSON e))
-    respond (IncomingMsg (MsgError e@(Error1 _ _)) _) =
-        MsgNotif (Notif1 "error" (toJSON e))
+    respond (IncomingMsg (MsgError e) _) =
+        MsgNotif (Notif (getErrVer e) "error" (toJSON e))
     respond _ = undefined
 
-    match (MsgRequest (Request m p _))
-        (IncomingMsg (MsgResponse (Response p' _)) (Just (Request m' p'' _))) =
-        p == p' && p == p'' && m == m'
-    match (MsgRequest (Request1 m p _))
-        (IncomingMsg (MsgResponse (Response1 p' _)) (Just (Request1 m' p'' _))) =
-        p == p' && p == p'' && m == m'
-    match (MsgNotif (Notif _ p))
-        (IncomingMsg (MsgNotif (Notif _ p')) Nothing) =
-        p == p'
-    match (MsgNotif (Notif1 _ p))
-        (IncomingMsg (MsgNotif (Notif1 _ p')) Nothing) =
-        p == p'
-    match (MsgResponse (Response _ i))
-        (IncomingMsg (MsgError (Error (ErrorObj _ c d) IdNull)) Nothing) =
-        toJSON i == d && c == (-32000)
-    match (MsgResponse (Response1 _ _))
-        (IncomingMsg (MsgError (Error1 e IdNull)) Nothing) =
-        take 17 e == "Id not recognized"
-    match (MsgError e@(Error _ IdNull))
-        (IncomingMsg (MsgNotif (Notif "error" (e'))) Nothing) =
+    match (MsgRequest (Request ver' m p _))
+        ( IncomingMsg (MsgResponse (Response ver'' p' _))
+                      (Just (Request ver''' m' p'' _)) ) =
+        p == p' && p == p'' && m == m' && ver' == ver'' && ver'' == ver'''
+    match (MsgNotif (Notif ver' _ p))
+        (IncomingMsg (MsgNotif (Notif ver'' _ p')) Nothing) =
+        p == p' && ver' == ver''
+    match (MsgResponse (Response ver' _ _))
+        (IncomingMsg (MsgError e) Nothing) =
+        ver' == getErrVer e && getErrMsg e == "Id not recognized"
+    match (MsgError e@(ErrorObj _ _ _ _ IdNull))
+        (IncomingMsg (MsgNotif (Notif _ "error" e')) Nothing) =
         toJSON e == e'
-    match (MsgError e@(Error1 _ IdNull))
-        (IncomingMsg (MsgNotif (Notif1 "error" (e'))) Nothing) =
-        toJSON e == e'
-    match (MsgError (Error _ i))
-        (IncomingMsg (MsgError (Error (ErrorObj _ c d) IdNull)) Nothing) =
-        c == (-32000) && toJSON i == d
-    match (MsgError (Error1 _ _))
-        (IncomingMsg (MsgError (Error1 e IdNull)) Nothing) =
-        take 17 e == "Id not recognized"
+    match (MsgError _)
+        (IncomingMsg (MsgError e) Nothing) =
+        getErrMsg e == "Id not recognized"
     match _ _ = False

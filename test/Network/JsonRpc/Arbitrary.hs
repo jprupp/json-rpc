@@ -11,11 +11,12 @@ import Data.Aeson.Types hiding (Error)
 import qualified Data.HashMap.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import Network.JsonRpc.Data
+import Network.JsonRpc
 import Test.QuickCheck.Arbitrary
 import Test.QuickCheck.Gen
 
 -- | A pair of a request and its corresponding response.
+-- Id and version should match.
 data ReqRes q r = ReqRes !(Request q) !(Response r)
     deriving (Show, Eq)
 
@@ -23,32 +24,35 @@ instance Arbitrary (ReqRes Value Value) where
     arbitrary = do
         rq <- arbitrary
         rs <- arbitrary
-        let rs' = rs { getResId = getReqId rq }
+        let rs' = rs { getResId = getReqId rq, getResVer = getReqVer rq }
         return $ ReqRes rq rs'
 
 instance Arbitrary Text where
     arbitrary = T.pack <$> arbitrary
 
+instance Arbitrary Ver where
+    arbitrary = elements [V1, V2]
+
 instance (Arbitrary q, ToRequest q) => Arbitrary (Request q) where
     arbitrary = do
         q <- arbitrary
+        v <- arbitrary
         let m = requestMethod q
-        oneof [ Request  m q <$> arbitrary
-              , Request1 m q <$> arbitrary ]
+        Request v m q <$> arbitrary
 
 instance (Arbitrary n, ToNotif n) => Arbitrary (Notif n) where
     arbitrary = do
         n <- arbitrary
+        v <- arbitrary
         let m = notifMethod n
-        oneof $ map return [Notif m n, Notif1 m n]
+        return $ Notif v m n
 
 instance Arbitrary r => Arbitrary (Response r) where
-    arbitrary = oneof [ Response1 <$> arbitrary <*> arbitrary
-                      , Response  <$> arbitrary <*> arbitrary ]
+    arbitrary = Response <$> arbitrary <*> arbitrary <*> arbitrary
 
-instance Arbitrary Error where
-    arbitrary = oneof [ Error1 <$> arbitrary <*> arbitrary
-                      , Error  <$> arbitrary <*> arbitrary ]
+instance Arbitrary ErrorObj where
+    arbitrary = ErrorObj <$> arbitrary <*> arbitrary <*> arbitrary
+                         <*> arbitrary <*> arbitrary
 
 instance ( Arbitrary q, Arbitrary n, Arbitrary r
          , ToRequest q, ToNotif n, ToJSON r )
@@ -61,9 +65,6 @@ instance ( Arbitrary q, Arbitrary n, Arbitrary r
 
 instance Arbitrary Id where
     arbitrary = oneof [IdInt <$> arbitrary, IdTxt <$> arbitrary]
-
-instance Arbitrary ErrorObj where
-    arbitrary = ErrorObj <$> arbitrary <*> arbitrary <*> arbitrary
 
 instance Arbitrary Value where
     arbitrary = resize 10 $ oneof [val, lsn, objn] where
