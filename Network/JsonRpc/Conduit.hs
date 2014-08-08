@@ -11,6 +11,7 @@ module Network.JsonRpc.Conduit
 , query
   -- ** Low-Level
 , Session(..)
+, SentRequests
 , initSession
 , encodeConduit
 , msgConduit
