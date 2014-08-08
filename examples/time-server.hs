@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-import Data.Aeson.Types hiding (Error)
+import Data.Aeson.Types
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import Data.Conduit.Network
@@ -21,21 +21,16 @@ instance ToJSON TimeRes where
 srv :: AppConduits () () TimeRes TimeReq () () IO -> IO ()
 srv (src, snk) = src $= CL.mapM respond $$ snk
 
--- JSON-RPC 2.0
 respond :: IncomingMsg () TimeReq () ()
         -> IO (Message () () TimeRes)
-respond (IncomingMsg (MsgRequest (Request _ TimeReq i)) Nothing) = do    
+respond (IncomingMsg (MsgRequest (Request ver _ TimeReq i)) Nothing) = do    
     t <- getCurrentTime
-    return $ MsgResponse (Response (TimeRes t) i)
-
--- JSON-RPC 1.0
-respond (IncomingMsg (MsgRequest (Request1 _ TimeReq i)) Nothing) = do    
-    t <- getCurrentTime
-    return $ MsgResponse (Response1 (TimeRes t) i)
+    return $ MsgResponse (Response ver (TimeRes t) i)
 
 respond (IncomingError e) = return $ MsgError e
+respond (IncomingMsg (MsgError e) _) = return $ MsgError $ e
 respond _ = undefined
 
 main :: IO ()
-main = tcpServer False (serverSettings 31337 "127.0.0.1") srv
+main = tcpServer V2 (serverSettings 31337 "127.0.0.1") srv
 

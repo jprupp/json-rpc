@@ -26,22 +26,16 @@ instance FromResponse TimeRes where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
 
 cli :: AppConduits TimeReq () () () () TimeRes IO
-    -> IO String
+    -> IO UTCTime
 cli (src, snk) = do
-    CL.sourceList [MsgRequest $ buildRequest TimeReq] $$ snk
+    CL.sourceList [MsgRequest $ buildRequest V2 TimeReq] $$ snk
     ts <- src $$ CL.consume
     case ts of
-        [] ->
-            error "No response received"
-        [IncomingError (Error (ErrorObj m _ _) _)] ->
-            error $ "Client error: " ++ m
-        [IncomingMsg (MsgError (Error (ErrorObj m _ _) _)) _] ->
-            error $ "Server error: " ++ m
-        [IncomingMsg (MsgResponse (Response (TimeRes t) _)) _] ->
-            return $ formatTime defaultTimeLocale "%c" t
+        [] -> error "No response received"
+        [IncomingError (ErrorObj _ m _ _ _)] -> error $ "Unknown: " ++ m
+        [IncomingMsg (MsgError (ErrorObj _ m _ _ _)) _] -> error m
+        [IncomingMsg (MsgResponse (Response _ (TimeRes t) _)) _] -> return t
         _ -> undefined
 
 main :: IO ()
-main = do
-    t <- tcpClient False True (clientSettings 31337 "127.0.0.1") cli
-    putStrLn t
+main = tcpClient V2 True (clientSettings 31337 "127.0.0.1") cli >>= print

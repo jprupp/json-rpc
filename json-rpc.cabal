@@ -1,6 +1,12 @@
 name:                   json-rpc
 version:                0.1.0.0
 synopsis:               Fully-featured JSON-RPC 2.0 library
+description:
+  This JSON-RPC library is fully-compatible with JSON-RPC 2.0 and
+  partially-compatible with JSON-RPC 1.0. It provides an interface that combines
+  a JSON-RPC client and server. It can set and keep track of request ids to
+  parse responses. There is support for sending and receiving notifications.
+  You may use any underlying transport. Basic TCP client and server provided.
 homepage:               https://github.com/xenog/json-rpc
 license:                PublicDomain
 license-file:           UNLICENSE
@@ -8,7 +14,7 @@ author:                 Jean-Pierre Rupp
 maintainer:             root@haskoin.com
 category:               Network
 build-type:             Simple
-extra-source-files:     README.markdown
+extra-source-files:     README.md
 cabal-version:          >= 1.10
 
 library
