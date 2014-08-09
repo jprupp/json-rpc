@@ -1,5 +1,5 @@
 name:                   json-rpc
-version:                0.1.0.2
+version:                0.1.0.4
 synopsis:               Fully-featured JSON-RPC 2.0 library
 description:
   This JSON-RPC library is fully-compatible with JSON-RPC 2.0 and
@@ -29,7 +29,7 @@ library
                         conduit-extra               >= 1.1      && < 1.2,
                         deepseq                     >= 1.3      && < 1.4,
                         hashable                    >= 1.2      && < 1.3,
-                        mtl                         >= 2.1      && < 2.2,
+                        mtl                         >= 2.1      && < 2.3,
                         stm                         >= 2.4      && < 2.5,
                         stm-conduit                 >= 2.4      && < 2.6,
                         text                        >= 1.1      && < 1.2,
@@ -52,7 +52,7 @@ test-suite test-json-rpc
                         deepseq                     >= 1.3      && < 1.4,
                         hashable                    >= 1.2      && < 1.3,
                         json-rpc                    >= 0.1      && < 0.2,
-                        mtl                         >= 2.1      && < 2.2,
+                        mtl                         >= 2.1      && < 2.3,
                         stm                         >= 2.4      && < 2.5,
                         stm-conduit                 >= 2.4      && < 2.5,
                         text                        >= 1.1      && < 1.2,
