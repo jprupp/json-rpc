@@ -67,14 +67,15 @@ instance (NFData qo, NFData qi, NFData ni, NFData ri)
 data Session qo = Session
     { lastId        :: TVar Id                  -- ^ Last generated id
     , sentRequests  :: TVar (SentRequests qo)   -- ^ Map of ids to requests
-    , isLast        :: TVar Bool                -- ^ Has the sink closed?
+    , isLast        :: TQueue Bool
+    -- ^ For each sent request, write a False, when sink closes, write a True
     }
 
 -- | Initialize JSON-RPC session.
 initSession :: STM (Session qo)
 initSession = Session <$> newTVar (IdInt 0)
                       <*> newTVar M.empty
-                      <*> newTVar False
+                      <*> newTQueue
 
 -- | Conduit that serializes JSON documents for sending to the network.
 encodeConduit :: (ToJSON a, Monad m) => Conduit a m ByteString
@@ -84,16 +85,18 @@ encodeConduit = CL.map (L8.toStrict . flip L8.append "\n" . encode)
 -- Adds an id to requests whose id is 'IdNull'.
 -- Tracks all sent requests to match corresponding responses.
 msgConduit :: MonadIO m
-           => Session qo
+           => Bool
+           -- ^ Set to true if decodeConduit must disconnect on last response
+           -> Session qo
            -> Conduit (Message qo no ro) m (Message qo no ro)
-msgConduit qs = await >>= \nqM -> case nqM of
-    Nothing ->
-        liftIO (atomically $ writeTVar (isLast qs) True) >> return ()
+msgConduit c qs = await >>= \nqM -> case nqM of
+    Nothing -> do
+        when c . liftIO . atomically $ writeTQueue (isLast qs) True
     Just (MsgRequest rq) -> do
         msg <- MsgRequest <$> liftIO (atomically $ addId rq)
-        yield msg >> msgConduit qs
+        yield msg >> msgConduit c qs
     Just msg ->
-        yield msg >> msgConduit qs
+        yield msg >> msgConduit c qs
   where
     addId rq = case getReqId rq of
         IdNull -> do
@@ -104,10 +107,12 @@ msgConduit qs = await >>= \nqM -> case nqM of
                 h'  = M.insert i' rq' h
             writeTVar (lastId qs) i'
             writeTVar (sentRequests qs) h'
+            when c $ writeTQueue (isLast qs) False
             return rq'
         i -> do
             h <- readTVar (sentRequests qs)
             writeTVar (sentRequests qs) (M.insert i rq h)
+            when c $ writeTQueue (isLast qs) False
             return rq
 
 -- | Conduit to decode incoming JSON-RPC messages.  An error in the decoding
@@ -120,33 +125,41 @@ decodeConduit
     -> Session qo                   -- ^ JSON-RPC session
     -> Conduit ByteString m (IncomingMsg qo qi ni ri)
                                     -- ^ Decoded incoming messages
-decodeConduit ver c qs = CB.lines =$= f where
-    f = await >>= \bsM -> case bsM of
+decodeConduit ver c qs = CB.lines =$= f True where
+    f re = if c && re
+      then do
+        l <- liftIO . atomically $ readTQueue (isLast qs)
+        if l then return () else g
+      else g
+
+    g = await >>= \bsM -> case bsM of
         Nothing ->
             return ()
         Just bs -> do
-            (m, d) <- liftIO . atomically $ decodeSTM bs
-            yield m >> unless d f
+            msg <- liftIO . atomically $ decodeSTM bs
+            yield msg >> f (re msg)
+      where
+        re (IncomingMsg _ (Just _)) = True
+        re _ = False
 
     decodeSTM bs = readTVar (sentRequests qs) >>= \h -> case decodeMsg h bs of
         Right m@(MsgResponse rs) -> do
-            (rq, dis) <- requestSTM h $ getResId rs
-            return (IncomingMsg m (Just rq), dis)
+            rq <- requestSTM h $ getResId rs
+            return $ IncomingMsg m (Just rq)
         Right m@(MsgError re) -> case getErrId re of
             IdNull ->
-                return (IncomingMsg m Nothing, False)
+                return $ IncomingMsg m Nothing
             i -> do
-                (rq, dis) <- requestSTM h i
-                return (IncomingMsg m (Just rq), dis)
-        Right m -> return (IncomingMsg m Nothing, False)
-        Left  e -> return (IncomingError e, False)
+                rq <- requestSTM h i
+                return $ IncomingMsg m (Just rq)
+        Right m -> return $ IncomingMsg m Nothing
+        Left  e -> return $ IncomingError e
 
     requestSTM h i = do
        let rq = fromJust $ i `M.lookup` h
            h' = M.delete i h
        writeTVar (sentRequests qs) h'
-       t <- readTVar $ isLast qs
-       return (rq, c && t && M.null h')
+       return rq
 
     decodeMsg h bs = case eitherDecodeStrict' bs of
         Left  _ -> Left $ errorParse ver Null
@@ -225,7 +238,7 @@ runConduits ver d rpcSnk rpcSrc f = do
             link a
             _ <- rpcSrc $= decodeConduit ver d qs $$ inbSnk
             wait a
-    outThread qs outSrc = outSrc $= msgConduit qs $= encodeConduit $$ rpcSnk
+    outThread qs outSrc = outSrc $= msgConduit d qs $= encodeConduit $$ rpcSnk
     g inbSrc outSnk a = do
         link a
         x <- f (inbSrc, outSnk)
