@@ -6,11 +6,13 @@ module Network.JsonRpc.Tests (tests) where
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
+import Control.Exception hiding (assert)
 import Control.Monad
-import Data.Aeson.Types hiding (Error)
+import Data.Aeson.Types
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import Data.List
+import Data.Conduit.Network
 import Data.Conduit.TMChan
 import qualified Data.HashMap.Strict as M
 import Data.Maybe
@@ -57,6 +59,7 @@ tests =
             (decodeErrConduit :: ([ReqRes Value Value], Ver) -> Property)
         , testProperty "Sending messages" sendMsgNet
         , testProperty "Two-way communication" twoWayNet
+        , testProperty "Real network communication" realNet
         ]
     ]
 
@@ -390,3 +393,34 @@ twoWayNet (rr, ver) = monadicIO $ do
         (IncomingMsg (MsgError e) Nothing) =
         getErrMsg e == "Id not recognized"
     match _ _ = False
+
+realNet :: ([Request Value], Ver) -> Property
+realNet (rr, ver) = monadicIO $ do
+    rs <- run $ do
+        withAsync (tcpServer ver ss srvApp) $ \_ -> cli
+    assert $ length rs == length rr
+    assert $
+        map (getReqParams . fromJust . matchingReq) rs == map getReqParams rr
+  where
+    ss = serverSettings 58493 "127.0.0.1"
+    cs = clientSettings 58493 "127.0.0.1"
+
+    cli = do
+        cE <- try $ tcpClient ver True cs cliApp
+        either (const cli) return
+            (cE :: Either SomeException [IncomingMsg Value () () Value])
+
+    srvApp :: AppConduits () () Value Value () () IO -> IO ()
+    srvApp (src, snk) = src $= CL.map respond $$ snk
+
+    cliApp :: AppConduits Value () () () () Value IO
+           -> IO [IncomingMsg Value () () Value]
+    cliApp (src, snk) = do
+        CL.sourceList (map f rr) $$ snk
+        src $$ CL.consume
+      where
+        f rq = MsgRequest (rq { getReqId = IdNull })
+
+    respond (IncomingMsg (MsgRequest (Request ver' _ p i)) _) =
+        MsgResponse (Response ver' p i)
+    respond _ = undefined
