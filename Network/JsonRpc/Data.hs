@@ -265,7 +265,9 @@ instance FromJSON ErrorObj where
                                           <*> b .:? "data" .!= Null
                                           <*> return i
                 _ -> fail "JSON-RPC 2.0 error must be a JSON object"
-            V1 -> o .: "error" >>= \e -> return $ ErrorObj V1 e 0 Null i
+            V1 -> (o .: "error"  >>= \e -> return $ ErrorObj V1 e 0 Null i) <|>
+                  (o .: "result" >>= \e -> return $ ErrorObj V1 e 0 Null i)
+                      -- Buggy servers sometimes put errors in result field
 
 instance ToJSON ErrorObj where
     toJSON (ErrorObj V2 m c d i) = object [jr2, "id" .= i, "error" .= o] where
