@@ -24,14 +24,16 @@ import Control.Concurrent.STM
 import Control.DeepSeq
 import Control.Monad
 import Control.Monad.Trans
+import Control.Monad.Trans.State
 import Data.Aeson
-import Data.Aeson.Types
+import Data.Aeson.Types (parseEither)
+import Data.Attoparsec.ByteString
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as M
 import Data.Conduit
-import qualified Data.Conduit.Binary as CB
 import qualified Data.Conduit.List as CL
 import Data.Conduit.Network
 import Data.Conduit.TMChan
@@ -79,7 +81,7 @@ initSession = Session <$> newTVar (IdInt 0)
 
 -- | Conduit that serializes JSON documents for sending to the network.
 encodeConduit :: (ToJSON a, Monad m) => Conduit a m ByteString
-encodeConduit = CL.map (L8.toStrict . flip L8.append "\n" . encode)
+encodeConduit = CL.map (L8.toStrict . encode)
 
 -- | Conduit for outgoing JSON-RPC messages.
 -- Adds an id to requests whose id is 'IdNull'.
@@ -125,24 +127,46 @@ decodeConduit
     -> Session qo                   -- ^ JSON-RPC session
     -> Conduit ByteString m (IncomingMsg qo qi ni ri)
                                     -- ^ Decoded incoming messages
-decodeConduit ver c qs = CB.lines =$= f True where
+decodeConduit ver c qs = evalStateT (f True) Nothing where
     f re = if c && re
       then do
         l <- liftIO . atomically $ readTQueue (isLast qs)
-        if l then return () else g
-      else g
+        if l then return () else loop
+      else loop
 
-    g = await >>= \bsM -> case bsM of
-        Nothing ->
-            return ()
-        Just bs -> do
-            msg <- liftIO . atomically $ decodeSTM bs
-            yield msg >> f (re msg)
+    loop = lift await >>= maybe flush process
+
+    process = runParser >=> handle
+
+    flush = do
+      p <- get
+      case p of
+        Nothing -> return ()
+        Just k -> handle (k B.empty)
+
+    runParser chunk = do
+      p <- getPartialParser
+      return $ case p of
+        Nothing -> parse json' chunk
+        Just k  -> k chunk
+
+    getPartialParser = get <* put Nothing
+
+    handle (Fail {})     = lift (yield . IncomingError $ errorParse ver Null)
+    handle (Partial k)   = put (Just k) >> loop
+    handle (Done rest v) = do
+        msg <- liftIO . atomically $ decodeSTM v
+        lift $ yield msg
+        if B.null rest
+          then f (re msg)
+          else process rest
       where
         re (IncomingMsg _ (Just _)) = True
         re _ = False
 
-    decodeSTM bs = readTVar (sentRequests qs) >>= \h -> case decodeMsg h bs of
+    decodeSTM v = readTVar (sentRequests qs) >>= \h -> case parseEither (topParse h) v of
+      Left _ -> return . IncomingError $ errorParse ver Null
+      Right x -> case x of
         Right m@(MsgResponse rs) -> do
             rq <- requestSTM h $ getResId rs
             return $ IncomingMsg m (Just rq)
@@ -160,12 +184,6 @@ decodeConduit ver c qs = CB.lines =$= f True where
            h' = M.delete i h
        writeTVar (sentRequests qs) h'
        return rq
-
-    decodeMsg h bs = case eitherDecodeStrict' bs of
-        Left  _ -> Left $ errorParse ver Null
-        Right v -> case parseEither (topParse h) v of
-            Left  _ -> Left $ errorParse ver Null
-            Right x -> x
 
     topParse h v = parseReq v
                <|> parseNot v
