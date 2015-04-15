@@ -30,6 +30,7 @@ import Data.Aeson.Types (parseEither)
 import Data.Attoparsec.ByteString
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy.Char8 as L8
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as M
@@ -164,20 +165,22 @@ decodeConduit ver c qs = evalStateT (f True) Nothing where
         re (IncomingMsg _ (Just _)) = True
         re _ = False
 
-    decodeSTM v = readTVar (sentRequests qs) >>= \h -> case parseEither (topParse h) v of
-      Left _ -> return . IncomingError $ errorParse ver Null
-      Right x -> case x of
-        Right m@(MsgResponse rs) -> do
-            rq <- requestSTM h $ getResId rs
-            return $ IncomingMsg m (Just rq)
-        Right m@(MsgError re) -> case getErrId re of
-            IdNull ->
-                return $ IncomingMsg m Nothing
-            i -> do
-                rq <- requestSTM h i
+    decodeSTM v = do
+        h <- readTVar (sentRequests qs)
+        case parseEither (topParse h) v of
+          Left _ -> return . IncomingError $ errorParse ver Null
+          Right x -> case x of
+            Right m@(MsgResponse rs) -> do
+                rq <- requestSTM h $ getResId rs
                 return $ IncomingMsg m (Just rq)
-        Right m -> return $ IncomingMsg m Nothing
-        Left  e -> return $ IncomingError e
+            Right m@(MsgError re) -> case getErrId re of
+                IdNull ->
+                    return $ IncomingMsg m Nothing
+                i -> do
+                    rq <- requestSTM h i
+                    return $ IncomingMsg m (Just rq)
+            Right m -> return $ IncomingMsg m Nothing
+            Left  e -> return $ IncomingError e
 
     requestSTM h i = do
        let rq = fromJust $ i `M.lookup` h
@@ -273,7 +276,10 @@ tcpClient :: ( FromRequest qi, FromNotif ni, FromResponse ri
                                       -- ^ JSON-RPC action
           -> IO a                     -- ^ Output of action
 tcpClient ver d cs f = runTCPClient cs $ \ad -> do
-    runConduits ver d (appSink ad) (appSource ad) f
+    runConduits ver d (cr =$ appSink ad) (appSource ad $= ln) f
+  where
+    cr = CL.map (flip B8.snoc '\n')
+    ln = CL.mapFoldable B8.lines
 
 -- JSON-RPC-over-TCP server.
 tcpServer :: ( FromRequest qi, FromNotif ni, FromResponse ri
@@ -284,5 +290,7 @@ tcpServer :: ( FromRequest qi, FromNotif ni, FromResponse ri
           -- ^ JSON-RPC action to perform on connecting client thread
           -> IO ()
 tcpServer ver ss f = runTCPServer ss $ \cl -> do
-    runConduits ver False (appSink cl) (appSource cl) f
+    runConduits ver False (cr =$ appSink cl) (appSource cl) f
+  where
+    cr = CL.map (flip B8.snoc '\n')
 
