@@ -42,7 +42,7 @@ import Data.Maybe
 import Data.Text (Text)
 import Network.JsonRpc.Data
 
--- | Conduits of sending and receiving JSON-RPC messages.
+-- | Conduits for sending and receiving JSON-RPC messages.
 type AppConduits qo no ro qi ni ri m =
     (Source m (IncomingMsg qo qi ni ri), Sink (Message qo no ro) m ())
 
@@ -93,7 +93,7 @@ msgConduit :: MonadIO m
            -> Session qo
            -> Conduit (Message qo no ro) m (Message qo no ro)
 msgConduit c qs = await >>= \nqM -> case nqM of
-    Nothing -> do
+    Nothing ->
         when c . liftIO . atomically $ writeTQueue (isLast qs) True
     Just (MsgRequest rq) -> do
         msg <- MsgRequest <$> liftIO (atomically $ addId rq)
@@ -132,7 +132,7 @@ decodeConduit ver c qs = evalStateT (f True) Nothing where
     f re = if c && re
       then do
         l <- liftIO . atomically $ readTQueue (isLast qs)
-        if l then return () else loop
+        unless l loop
       else loop
 
     loop = lift await >>= maybe flush process
@@ -236,7 +236,7 @@ query ver qs (src, snk) = withAsync (src $$ CL.consume) $ \a -> do
 
 -- Will create JSON-RPC conduits around 'ByteString' conduits from a transport
 -- layer.
-runConduits :: ( FromRequest qi, FromNotif ni, FromResponse ri 
+runConduits :: ( FromRequest qi, FromNotif ni, FromResponse ri
                , ToJSON qo, ToJSON no, ToJSON ro )
             => Ver                      -- ^ JSON-RPC version
             -> Bool                     -- ^ Disconnect on last response
@@ -246,7 +246,8 @@ runConduits :: ( FromRequest qi, FromNotif ni, FromResponse ri
                                         -- ^ JSON-RPC action
             -> IO a                     -- ^ Output of action
 runConduits ver d rpcSnk rpcSrc f = do
-    (reqChan, msgChan) <- atomically $ (,) <$> newTBMChan 128 <*> newTBMChan 128
+    (reqChan, msgChan) <- atomically $ (,) <$> newTBMChan 128
+                                           <*> newTBMChan 128
     let inbSrc = sourceTBMChan msgChan
         inbSnk = sinkTBMChan   msgChan True
         outSrc = sourceTBMChan reqChan
@@ -275,11 +276,19 @@ tcpClient :: ( FromRequest qi, FromNotif ni, FromResponse ri
           -> (AppConduits qo no ro qi ni ri IO -> IO a)
                                       -- ^ JSON-RPC action
           -> IO a                     -- ^ Output of action
-tcpClient ver d cs f = runTCPClient cs $ \ad -> do
+tcpClient ver d cs f = runTCPClient cs $ \ad ->
     runConduits ver d (cr =$ appSink ad) (appSource ad $= ln) f
   where
-    cr = CL.map (flip B8.snoc '\n')
-    ln = CL.mapFoldable B8.lines
+    cr = CL.map (`B8.snoc` '\n')
+    ln = await >>= \bsM -> case bsM of
+        Nothing -> return ()
+        Just bs -> let (l, ls) = B8.break (=='\n') bs in case ls of
+            "" -> await >>= \bsM' -> case bsM' of
+                Nothing  -> if B8.null l then return () else yield l
+                Just bs' -> leftover (bs `B8.append` bs') >> ln
+            _  -> case l of
+                "" -> leftover (B8.tail ls) >> ln
+                _  -> leftover (B8.tail ls) >> yield l >> ln
 
 -- JSON-RPC-over-TCP server.
 tcpServer :: ( FromRequest qi, FromNotif ni, FromResponse ri
@@ -289,8 +298,7 @@ tcpServer :: ( FromRequest qi, FromNotif ni, FromResponse ri
           -> (AppConduits qo no ro qi ni ri IO -> IO ())
           -- ^ JSON-RPC action to perform on connecting client thread
           -> IO ()
-tcpServer ver ss f = runTCPServer ss $ \cl -> do
+tcpServer ver ss f = runTCPServer ss $ \cl ->
     runConduits ver False (cr =$ appSink cl) (appSource cl) f
   where
-    cr = CL.map (flip B8.snoc '\n')
-
+    cr = CL.map (`B8.snoc` '\n')

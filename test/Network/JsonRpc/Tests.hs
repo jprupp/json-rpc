@@ -53,9 +53,9 @@ tests =
             (newMsgConduit :: [Message Value Value Value] -> Property)
         , testProperty "Decode requests"
             (decodeReqConduit :: ([Request Value], Ver) -> Property)
-        , testProperty "Decode responses" 
+        , testProperty "Decode responses"
             (decodeResConduit :: ([ReqRes Value Value], Ver) -> Property)
-        , testProperty "Bad responses" 
+        , testProperty "Bad responses"
             (decodeErrConduit :: ([ReqRes Value Value], Ver) -> Property)
         , testProperty "Sending messages" sendMsgNet
         , testProperty "Two-way communication" twoWayNet
@@ -79,13 +79,13 @@ reqFields rq = case rq of
     vals m p i = fromMaybe False $ parseMaybe (f m p i) o
     f m p i _ = do
         j <- o .:? "jsonrpc"
-        guard $ fromMaybe True $ fmap (== ("2.0" :: Text)) j
+        guard $ maybe True (== ("2.0" :: Text)) j
         i' <- o .: "id"
         guard $ i == i'
         m' <- o .: "method"
         guard $ m == m'
         p' <- o .:? "params" .!= Null
-        guard $ (toJSON p) == p'
+        guard $ toJSON p == p'
         return True
 
 reqDecode :: (Eq a, ToRequest a, ToJSON a, FromRequest a) => Request a -> Bool
@@ -111,11 +111,11 @@ notifFields rn = case rn of
         i <- o .:? "id" .!= Null
         guard $ i == Null
         j <- o .:? "jsonrpc"
-        guard $ fromMaybe True $ fmap (== ("2.0" :: Text)) j
+        guard $ maybe True (== ("2.0" :: Text)) j
         m' <- o .: "method"
         guard $ m == m'
         p' <- o .:? "params" .!= Null
-        guard $ (toJSON p) == p'
+        guard $ toJSON p == p'
         return True
 
 notifDecode :: (Eq a, ToNotif a, ToJSON a, FromNotif a)
@@ -141,7 +141,7 @@ resFields rs = case rs of
         i' <- o .: "id"
         guard $ i == i'
         j <- o .:? "jsonrpc"
-        guard $ fromMaybe True $ fmap (== ("2.0" :: Text)) j
+        guard $ maybe True (== ("2.0" :: Text)) j
         s' <- o .: "result"
         guard $ s == s'
         e <- o .:? "error" .!= Null
@@ -209,7 +209,7 @@ decodeReqConduit (vs, ver) = monadicIO $ do
             $= encodeConduit
             $= decodeConduit ver False qs'
             $$ CL.consume
-    assert $ null $ filter unexpected inmsgs
+    assert $ not (any unexpected inmsgs)
     assert $ all (uncurry match) (zip vs inmsgs)
   where
     unexpected :: IncomingMsg () q () () -> Bool
@@ -237,7 +237,7 @@ decodeResConduit (rr, ver) = monadicIO $ do
             $= encodeConduit
             $= decodeConduit ver False qs
             $$ CL.consume
-    assert $ null $ filter unexpected inmsgs
+    assert $ not (any unexpected inmsgs)
     assert $ all (uncurry match) (zip vs inmsgs)
   where
     unexpected :: IncomingMsg q () () r -> Bool
@@ -277,7 +277,7 @@ decodeErrConduit (vs, ver) = monadicIO $ do
             $= encodeConduit
             $= decodeConduit ver False qs
             $$ CL.consume
-    assert $ null $ filter unexpected inmsgs
+    assert $ not (any unexpected inmsgs)
     assert $ all (uncurry match) (zip vs inmsgs)
   where
     unexpected :: IncomingMsg q () () r -> Bool
@@ -396,8 +396,7 @@ twoWayNet (rr, ver) = monadicIO $ do
 
 realNet :: ([Request Value], Ver) -> Property
 realNet (rr, ver) = monadicIO $ do
-    rs <- run $ do
-        withAsync (tcpServer ver ss srvApp) $ \_ -> cli
+    rs <- run $ withAsync (tcpServer ver ss srvApp) $ const cli
     assert $ length rs == length rr
     assert $
         map (getReqParams . fromJust . matchingReq) rs == map getReqParams rr

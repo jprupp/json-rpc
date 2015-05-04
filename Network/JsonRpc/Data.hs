@@ -287,11 +287,11 @@ errorInvalid ver v = ErrorObj ver "Invalid request" (-32600) v IdNull
 
 -- | Invalid params.
 errorParams :: Ver -> Value -> Id -> ErrorObj
-errorParams ver v i = ErrorObj ver "Invalid params" (-32602) v i
+errorParams ver v = ErrorObj ver "Invalid params" (-32602) v
 
 -- | Method not found.
 errorMethod :: Ver -> Method -> Id -> ErrorObj
-errorMethod ver m i = ErrorObj ver "Method not found" (-32601) (toJSON m) i
+errorMethod ver m = ErrorObj ver "Method not found" (-32601) (toJSON m)
 
 -- | Id not recognized.
 errorId :: Ver -> Id -> ErrorObj
@@ -344,14 +344,14 @@ instance NFData Id where
     rnf _ = ()
 
 instance Enum Id where
-    toEnum i = IdInt i
+    toEnum = IdInt
     fromEnum (IdInt i) = i
-    fromEnum _ = error $ "Can't enumerate non-integral ids"
+    fromEnum _ = error "Can't enumerate non-integral ids"
 
 instance FromJSON Id where
     parseJSON s@(String _) = IdTxt <$> parseJSON s
     parseJSON n@(Number _) = IdInt <$> parseJSON n
-    parseJSON Null = return $ IdNull
+    parseJSON Null = return IdNull
     parseJSON _ = mzero
 
 instance ToJSON Id where
