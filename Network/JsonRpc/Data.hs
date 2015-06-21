@@ -362,7 +362,7 @@ instance ToJSON Id where
 -- | JSON-RPC version
 data Ver = V1 -- ^ JSON-RPC 1.0
          | V2 -- ^ JSON-RPC 2.0
-         deriving (Eq, Show, Read)
+         deriving (Eq, Show, Read, Generic)
 
 instance NFData Ver
 
