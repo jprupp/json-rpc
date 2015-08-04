@@ -1,7 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
+import Control.Concurrent
+import Control.Concurrent.STM
+import Control.Monad
+import Control.Monad.Trans
+import Data.Aeson
 import Data.Aeson.Types hiding (Error)
-import Data.Conduit
-import qualified Data.Conduit.List as CL
 import Data.Conduit.Network
 import qualified Data.Text as T
 import Data.Time.Clock
@@ -10,7 +13,7 @@ import Network.JsonRpc
 import System.Locale
 
 data TimeReq = TimeReq
-data TimeRes = TimeRes UTCTime
+data TimeRes = TimeRes { timeRes :: UTCTime }
 
 instance ToRequest TimeReq where
     requestMethod TimeReq = "time"
@@ -24,18 +27,13 @@ instance FromResponse TimeRes where
         Just t' -> return $ TimeRes t'
       where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
+    parseResult m = fail $ "Method not found: " ++ T.unpack m
 
-cli :: AppConduits TimeReq () () () () TimeRes IO
-    -> IO UTCTime
-cli (src, snk) = do
-    CL.sourceList [MsgRequest $ buildRequest V2 TimeReq] $$ snk
-    ts <- src $$ CL.consume
-    case ts of
-        [] -> error "No response received"
-        [IncomingError (ErrorObj _ m _ _ _)] -> error $ "Unknown: " ++ m
-        [IncomingMsg (MsgError (ErrorObj _ m _ _ _)) _] -> error m
-        [IncomingMsg (MsgResponse (Response _ (TimeRes t) _)) _] -> return t
-        _ -> undefined
+req :: JsonRpcT TimeReq TimeRes () () () () IO UTCTime
+req = sendRequest TimeReq >>= liftIO . atomically >>= \tsE -> case tsE of
+    Left  e -> error $ getErrMsg e
+    Right r -> liftIO (threadDelay 1000000) >> return (timeRes r)
 
 main :: IO ()
-main = tcpClient V2 True (clientSettings 31337 "127.0.0.1") cli >>= print
+main = jsonRpcTcpClient V2 (clientSettings 31337 "::1") undefined $
+    replicateM_ 4 $ req >>= liftIO . print

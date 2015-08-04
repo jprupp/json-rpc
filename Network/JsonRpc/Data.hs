@@ -28,6 +28,7 @@ module Network.JsonRpc.Data
 
   -- * Errors
 , ErrorObj(..)
+, ErrorMsg(..)
   -- ** Error Messages
 , errorParse
 , errorInvalid
@@ -49,6 +50,7 @@ import Control.Monad (when, guard, mzero)
 import Data.Aeson.Types
 import Data.Hashable (Hashable)
 import Data.Text (Text)
+import qualified Data.Text as T
 import GHC.Generics (Generic)
 
 
@@ -87,7 +89,7 @@ instance FromRequest () where
     paramsParser _ = Nothing
 
 -- | Parse JSON-RPC request.
-parseRequest :: FromRequest q => Value -> Parser (Either ErrorObj (Request q))
+parseRequest :: FromRequest q => Value -> Parser (Either ErrorMsg (Request q))
 parseRequest = withObject "request" $ \o -> do
     j <- o .:? "jsonrpc"
     i <- o .:  "id"
@@ -96,8 +98,9 @@ parseRequest = withObject "request" $ \o -> do
     p <- o .:? "params" .!= Null
     let ver = if j == Just ("2.0" :: Text) then V2 else V1
     case paramsParser m of
-        Nothing -> return (Left (errorMethod ver m i))
-        Just x -> parseIt ver m i x p <|> return (Left (errorParams ver p i))
+        Nothing -> return $ Left $ ErrorMsg ver (errorMethod m) i
+        Just x  -> parseIt ver m i x p
+               <|> return (Left $ ErrorMsg ver (errorParams p) i)
   where
     parseIt ver m i x p = (\y -> Right (Request ver m y i)) <$> x p
 
@@ -153,7 +156,7 @@ instance FromResponse () where
 
 -- | Parse JSON-RPC response.
 parseResponse :: FromResponse r
-              => Request q -> Value -> Parser (Either ErrorObj (Response r))
+              => Request q -> Value -> Parser (Either ErrorMsg (Response r))
 parseResponse rq = withObject "response" $ \o -> do
     let m  = getReqMethod rq
         qi = getReqId rq
@@ -205,7 +208,7 @@ instance FromNotif () where
     notifParamsParser _ = Nothing
 
 -- | Parse notifications.
-parseNotif :: FromNotif n => Value -> Parser (Either ErrorObj (Notif n))
+parseNotif :: FromNotif n => Value -> Parser (Either ErrorMsg (Notif n))
 parseNotif = withObject "notification" $ \o -> do
     j <- o .:? "jsonrpc"
     i <- o .:? "id" .!= IdNull
@@ -214,8 +217,9 @@ parseNotif = withObject "notification" $ \o -> do
     guard $ i == IdNull
     let ver = if j == Just ("2.0" :: Text) then V2 else V1
     case notifParamsParser m of
-        Nothing -> return (Left $ errorMethod ver m IdNull)
-        Just x -> f ver m x p <|> return (Left (errorParams ver p i))
+        Nothing -> return $ Left $ ErrorMsg ver (errorMethod m) IdNull
+        Just x  -> f ver m x p
+               <|> return (Left $ ErrorMsg ver (errorParams p) i)
   where
     f ver m x p = (Right . Notif ver m) <$> x p
 
@@ -242,60 +246,67 @@ buildNotif ver n = Notif ver (notifMethod n) n
 --
 
 -- | JSON-RPC errors.
-data ErrorObj = ErrorObj { getErrVer  :: !Ver           -- ^ Version
-                         , getErrMsg  :: !String        -- ^ Message
-                         , getErrCode :: !Int           -- ^ Error code (2.0)
-                         , getErrData :: !Value         -- ^ Error data (2.0)
+data ErrorObj = ErrorObj  { getErrMsg  :: !String        -- ^ Message
+                          , getErrCode :: !Int           -- ^ Error code (2.0)
+                          , getErrData :: !Value         -- ^ Error data (2.0)
+                          } deriving (Show, Eq)
+
+data ErrorMsg = ErrorMsg { getErrVer  :: !Ver           -- ^ Version
+                         , getErrObj  :: !ErrorObj      -- ^ Object
                          , getErrId   :: !Id            -- ^ Error id
                          } deriving (Eq, Show)
 
 instance NFData ErrorObj where
-    rnf (ErrorObj v m c d i) =
-        rnf v `seq` rnf m `seq` rnf c `seq` rnf d `seq` rnf i
+    rnf (ErrorObj m c d) = rnf m `seq` rnf c `seq` rnf d
 
-instance FromJSON ErrorObj where
+instance NFData ErrorMsg where
+    rnf (ErrorMsg v o i) = rnf v `seq` rnf o `seq` rnf i
+
+instance FromJSON ErrorMsg where
     parseJSON = withObject "error" $ \o -> do
         i <- o .:? "id" .!= IdNull
         j <- o .:? "jsonrpc"
         let ver = if j == Just ("2.0" :: Text) then V2 else V1
         case ver of
-            V2 -> o .: "error" >>= \e -> case e of
-                (Object b) -> ErrorObj V2 <$> b .: "message"
-                                          <*> b .: "code"
-                                          <*> b .:? "data" .!= Null
-                                          <*> return i
-                _ -> fail "JSON-RPC 2.0 error must be a JSON object"
-            V1 -> (o .: "error"  >>= \e -> return $ ErrorObj V1 e 0 Null i) <|>
-                  (o .: "result" >>= \e -> return $ ErrorObj V1 e 0 Null i)
-                      -- Buggy servers sometimes put errors in result field
+            V2 ->  (\p -> ErrorMsg V2 p i) <$> (e2 =<< o .: "error")
+            V1 -> ((\p -> ErrorMsg V1 p i) <$> (e1 =<< o .: "error"))
+              <|> ((\p -> ErrorMsg V1 p i) <$> (e1 =<< o .: "result"))
+                  -- Buggy V1 servers sometimes put errors in result field
+      where
+        e1 v = case v of
+            String t -> return $ ErrorObj (T.unpack t) 0 Null
+            _        -> return $ ErrorObj "" 0 v
+        e2 v = case v of
+            Object b -> ErrorObj <$> b .: "message" <*> b .:  "code"
+                                 <*> b .:? "data" .!= Null
+            _ -> fail "JSON-RPC 2.0 error must be a JSON object"
 
-instance ToJSON ErrorObj where
-    toJSON (ErrorObj V2 m c d i) = object [jr2, "id" .= i, "error" .= o] where
-        o = case d of
-            Null -> object ["code" .= c, "message" .= m]
-            _    -> object ["code" .= c, "message" .= m, "data" .= d]
-    toJSON (ErrorObj V1 m _ _ i) =
-        object ["id" .= i, "error" .= m, "result" .= Null]
+instance ToJSON ErrorMsg where
+    toJSON (ErrorMsg V2 o i) = object [jr2, "id" .= i, "error" .= o'] where
+        o' = object $ ["code" .= getErrCode o, "message" .= getErrMsg o] ++
+            if getErrData o == Null then [] else ["data" .= getErrData o]
+    toJSON (ErrorMsg V1 o i) =
+        object ["id" .= i, "error" .= getErrMsg o, "result" .= Null]
 
 -- | Parse error.
-errorParse :: Ver -> Value -> ErrorObj
-errorParse ver v = ErrorObj ver "Parse error" (-32700) v IdNull
+errorParse :: Value -> ErrorObj
+errorParse = ErrorObj "Parse error" (-32700)
 
 -- | Invalid request.
-errorInvalid :: Ver -> Value -> ErrorObj
-errorInvalid ver v = ErrorObj ver "Invalid request" (-32600) v IdNull
+errorInvalid :: Value -> ErrorObj
+errorInvalid = ErrorObj "Invalid request" (-32600)
 
 -- | Invalid params.
-errorParams :: Ver -> Value -> Id -> ErrorObj
-errorParams ver v = ErrorObj ver "Invalid params" (-32602) v
+errorParams :: Value -> ErrorObj
+errorParams = ErrorObj "Invalid params" (-32602)
 
 -- | Method not found.
-errorMethod :: Ver -> Method -> Id -> ErrorObj
-errorMethod ver m = ErrorObj ver "Method not found" (-32601) (toJSON m)
+errorMethod :: Method -> ErrorObj
+errorMethod = ErrorObj "Method not found" (-32601) . toJSON
 
 -- | Id not recognized.
-errorId :: Ver -> Id -> ErrorObj
-errorId ver i = ErrorObj ver "Id not recognized" (-32000) (toJSON i) IdNull
+errorId :: Id -> ErrorObj
+errorId = ErrorObj "Id not recognized" (-32000) . toJSON
 
 
 
@@ -304,23 +315,23 @@ errorId ver i = ErrorObj ver "Id not recognized" (-32000) (toJSON i) IdNull
 --
 
 -- | Class for any JSON-RPC message.
-data Message q n r
+data Message q r n
     = MsgRequest   { getMsgRequest  :: !(Request  q) }
-    | MsgNotif     { getMsgNotif    :: !(Notif    n) }
     | MsgResponse  { getMsgResponse :: !(Response r) }
-    | MsgError     { getMsgError    :: !ErrorObj     }
+    | MsgNotif     { getMsgNotif    :: !(Notif    n) }
+    | MsgError     { getMsgError    :: !ErrorMsg     }
     deriving (Eq, Show)
 
-instance (NFData q, NFData n, NFData r) => NFData (Message q n r) where
+instance (NFData q, NFData n, NFData r) => NFData (Message q r n) where
     rnf (MsgRequest  q) = rnf q
-    rnf (MsgNotif    n) = rnf n
     rnf (MsgResponse r) = rnf r
+    rnf (MsgNotif    n) = rnf n
     rnf (MsgError    e) = rnf e
 
 instance (ToJSON q, ToJSON n, ToJSON r) => ToJSON (Message q n r) where
     toJSON (MsgRequest  rq) = toJSON rq
-    toJSON (MsgNotif    rn) = toJSON rn
     toJSON (MsgResponse rs) = toJSON rs
+    toJSON (MsgNotif    rn) = toJSON rn
     toJSON (MsgError     e) = toJSON e
 
 --

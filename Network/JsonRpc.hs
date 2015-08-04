@@ -8,11 +8,11 @@ module Network.JsonRpc
   -- ** Client Example
   -- $client
 
-  module Network.JsonRpc.Conduit
+  module Network.JsonRpc.Interface
 , module Network.JsonRpc.Data
 ) where
 
-import Network.JsonRpc.Conduit
+import Network.JsonRpc.Interface
 import Network.JsonRpc.Data
 
 -- $introduction

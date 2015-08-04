@@ -29,7 +29,7 @@ source-repository this
 library
   exposed-modules:      Network.JsonRpc
   other-modules:        Network.JsonRpc.Data,
-                        Network.JsonRpc.Conduit
+                        Network.JsonRpc.Interface
   build-depends:        base                        >= 4.6      && < 5,
                         aeson                       >= 0.7      && < 0.9,
                         attoparsec                  >= 0.11,
@@ -56,18 +56,7 @@ test-suite test-json-rpc
                         Network.JsonRpc.Arbitrary
   build-depends:        base                        >= 4.6      && < 5,
                         aeson                       >= 0.7      && < 0.9,
-                        async                       >= 2.0      && < 2.1,
-                        bytestring                  >= 0.10     && < 0.11,
-                        conduit                     >= 1.2      && < 1.3,
-                        conduit-extra               >= 1.1      && < 1.2,
-                        deepseq                     >= 1.3      && < 1.4,
-                        hashable                    >= 1.1      && < 1.3,
-                        json-rpc                    >= 0.2      && < 0.3,
-                        mtl                         >= 2.1      && < 2.3,
-                        stm                         >= 2.4      && < 2.5,
-                        stm-conduit                 >= 2.5      && < 2.6,
-                        text                        >= 0.11     && < 1.3,
-                        unordered-containers        >= 0.2      && < 0.3,
+                        json-rpc,
                         QuickCheck                  >= 2.6      && < 2.8,
                         test-framework              >= 0.8      && < 0.9,
                         test-framework-quickcheck2  >= 0.3      && < 0.4
