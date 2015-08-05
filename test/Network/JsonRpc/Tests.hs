@@ -145,8 +145,7 @@ clientTest (qs, ver) = monadicIO $ do
   where
     r q = return $ Right (q :: Value)
     srv snk src = runJsonRpcT ver r snk src dummySrv
-    cli snk src = runJsonRpcT ver r snk src $
-        forM qs $ sendRequest >=> liftIO . atomically
+    cli snk src = runJsonRpcT ver r snk src . forM qs $ sendRequest
     results = map fromJust . rights
     correct (Right (Just _)) = True
     correct _ = False

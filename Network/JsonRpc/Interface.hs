@@ -128,15 +128,14 @@ processIncoming r = do
                     writeTVar s (x `M.delete` m) >> putTMVar p (Left err)
             return $ processIncoming r
 
--- | Returns Right Nothing if could not parse response. Run output in STM
--- monad. STM will block until response arrives.
+-- | Returns Right Nothing if could not parse response.
 sendRequest :: (ToJSON q, ToRequest q, FromResponse r, MonadIO m)
-            => q -> JsonRpcT m (STM (Either ErrorObj (Maybe r)))
+            => q -> JsonRpcT m (Either ErrorObj (Maybe r))
 sendRequest q = do
-    o <- reader outCh
     v <- reader rpcVer
     l <- reader lastId
     s <- reader sentReqs
+    o <- reader outCh
     p <- liftIO . atomically $ do
         p <- newEmptyTMVar 
         i <- succ <$> readTVar l
@@ -146,41 +145,32 @@ sendRequest q = do
         writeTBMChan o $ MsgRequest req 
         writeTVar l i
         return p
-    return $ takeTMVar p >>= \pE -> case pE of
+    liftIO . atomically $ takeTMVar p >>= \pE -> case pE of
         Left e -> return . Left $ getErrObj e
-        Right y@(Response ver r _) -> 
-            case fromResponse (requestMethod q) y of
-                Nothing -> do
-                    let err = MsgError $ RpcError ver (errorInvalid r) IdNull
-                    writeTBMChan o err
-                    return $ Right Nothing
-                Just x -> return . Right $ Just x
+        Right y -> case fromResponse (requestMethod q) y of
+            Nothing -> return $ Right Nothing
+            Just x -> return . Right $ Just x
 
--- | Send notification. Run output in STM monad. Will not block.
-sendNotif :: (ToJSON no, ToNotif no, Monad m) => no -> JsonRpcT m (STM ())
+-- | Send notification. Will not block.
+sendNotif :: (ToJSON no, ToNotif no, MonadIO m) => no -> JsonRpcT m ()
 sendNotif n = do
     o <- reader outCh
     v <- reader rpcVer
     let notif = buildNotif v n
-    return $ writeTBMChan o (MsgNotif notif)
+    liftIO . atomically $ writeTBMChan o (MsgNotif notif)
 
--- | Receive notifications from peer.
+-- | Receive notifications from peer. Will not block.
 -- Returns Nothing if incoming channel is closed and empty.
 -- Result is Right Nothing if it failed to parse notification.
--- Run output in STM monad. Will not block.
-receiveNotif :: (Monad m, FromNotif n)
-             => JsonRpcT m (STM (Maybe (Either ErrorObj (Maybe n))))
+receiveNotif :: (MonadIO m, FromNotif n)
+             => JsonRpcT m (Maybe (Either ErrorObj (Maybe n)))
 receiveNotif = do
     c <- reader notifCh
-    o <- reader outCh
-    return $ readTBMChan c >>= \nM -> case nM of
+    liftIO . atomically $ readTBMChan c >>= \nM -> case nM of
         Nothing -> return Nothing
         Just (Left e) -> return . Just . Left $ getErrObj e
-        Just (Right n@(Notif v _ p)) -> case fromNotif n of
-            Nothing -> do
-                let err = MsgError $ RpcError v (errorParse p) IdNull
-                writeTBMChan o err
-                return . Just $ Right Nothing
+        Just (Right n) -> case fromNotif n of
+            Nothing -> return . Just $ Right Nothing
             Just x -> return . Just . Right $ Just x
 
 -- | Create JSON-RPC session around ByteString conduits from transport
@@ -243,11 +233,11 @@ jsonRpcTcpServer ver ss r f = runTCPServer ss $ \cl ->
     runJsonRpcT ver r (cr =$ appSink cl) (appSource cl $= ln) f
 
 -- | Dummy server for servers not expecting client to send notifications,
--- that is most cases.
+-- that is true in most cases.
 dummySrv :: MonadIO m => JsonRpcT m ()
-dummySrv = forever $ do
-    n <- receiveNotif
-    liftIO (atomically n :: IO (Maybe (Either ErrorObj (Maybe ()))))
+dummySrv = receiveNotif >>= \nM -> case nM of
+        Just n -> (n :: Either ErrorObj (Maybe ())) `seq` dummySrv
+        Nothing -> return ()
 
 -- | Respond function for systems that do not reply to requests, as usual
 -- in clients.

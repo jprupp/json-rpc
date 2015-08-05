@@ -13,6 +13,8 @@ A JSON-RPC application using this interface is considered to be
 peer-to-peer, as it can send and receive all types of JSON-RPC message
 independent of whether it originated the connection.
 
+[Hackage documentation](http://hackage.haskell.org/package/json-rpc)
+
 
 Server Example
 --------------
@@ -55,7 +57,6 @@ Corresponding TCP client to get time from server.
 ``` haskell
 {-# LANGUAGE OverloadedStrings #-}
 import Control.Concurrent
-import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.Trans
 import Data.Aeson
@@ -85,7 +86,7 @@ instance FromResponse TimeRes where
     parseResult _ = Nothing
 
 req :: JsonRpcT IO UTCTime
-req = sendRequest TimeReq >>= liftIO . atomically >>= \ts -> case ts of
+req = sendRequest TimeReq >>= \ts -> case ts of
     Left e -> error $ fromError e
     Right (Just (TimeRes r)) -> return r
     _ -> error "Could not parse response"
