@@ -1,19 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Interface for JSON-RPC.
--- Types: qo = outgoing request,
---        ri = incoming response,
---        ni = incoming notification,
---        qi = incoming request,
---        ro = outgoing response,
---        no = outgoing notification.
 module Network.JsonRpc.Interface
 ( Respond
 , JsonRpcT
-, IncomingMsg
 , runJsonRpcT
 , sendRequest
 , sendNotif
-, receive
+, receiveNotif
 , jsonRpcTcpClient
 , jsonRpcTcpServer
 , dummySrv
@@ -25,8 +18,8 @@ import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.Trans.State
-import Data.Aeson
-import Data.Aeson.Types (parseEither)
+import Data.Aeson hiding (Error)
+import Data.Aeson.Types (parseMaybe)
 import Data.Attoparsec.ByteString
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
@@ -38,265 +31,212 @@ import Data.Conduit
 import qualified Data.Conduit.List as CL
 import Data.Conduit.Network
 import Data.Conduit.TMChan
-import Data.Maybe
-import Data.Text (Text)
 import Network.JsonRpc.Data
 
--- | Incoming notifications or errors.
-type IncomingMsg = Either ErrorObj
-
--- | Responder for incoming requests
-type Respond qi ro = qi -> IO (Either ErrorObj ro)
+-- | Map of ids to corresponding requests and promises of responses.
+type SentRequests = HashMap Id (TMVar (Either Error Response))
 
 -- | Conduits for sending and receiving JSON-RPC messages.
-data AppChans qo ri ni qi ro no =
-    AppChans { inCh    :: TBMChan (IncomingMsg ni)
-             , outCh   :: TBMChan (OutgoingMsg qo ri ro no)
-             , rpcVer  :: Ver
-             }
+data Session = Session { inCh     :: TBMChan (Either Error Message)
+                       , outCh    :: TBMChan Message
+                       , notifCh  :: TBMChan (Either Error Notif)
+                       , lastId   :: TVar Id
+                       , sentReqs :: TVar SentRequests
+                       , rpcVer   :: Ver
+                       }
 
-type JsonRpcT qo ri ni qi ro no = ReaderT (AppChans qo ri ni qi ro no)
-
--- | Map of ids to corresponding requests and promises of responses.
-type SentRequests qo ri = HashMap Id (Request qo, TMVar (Either ErrorObj ri))
-
--- | Outgoing messages.  Pack a request with a promise for corresponding
--- response.
-data OutgoingMsg qo ri ro no
-    = OutgoingReq !(Request qo) !(TMVar (Either ErrorObj ri))
-    | OutgoingRes !(Response ro)
-    | OutgoingNotif !(Notif no)
-    | OutgoingError !ErrorMsg
-
-instance (ToJSON qo, ToJSON ro, ToJSON no) => ToJSON (OutgoingMsg qo ri ro no)
-  where
-    toJSON (OutgoingReq q _) = toJSON q
-    toJSON (OutgoingRes   r) = toJSON r
-    toJSON (OutgoingNotif n) = toJSON n
-    toJSON (OutgoingError e) = toJSON e
-
--- | JSON-RPC session mutable data.
-data Session qo ri = Session
-    { lastId        :: TVar Id                     -- ^ Last generated id
-    , sentRequests  :: TVar (SentRequests qo ri)   -- ^ Map of ids to promises
-    }
+type JsonRpcT = ReaderT Session
 
 -- | Initialize JSON-RPC session.
-initSession :: STM (Session qo ri)
-initSession = Session <$> newTVar (IdInt 0) <*> newTVar M.empty
+initSession :: Ver -> STM Session
+initSession v = Session <$> newTBMChan 16
+                        <*> newTBMChan 16
+                        <*> newTBMChan 16
+                        <*> newTVar (IdInt 0)
+                        <*> newTVar M.empty
+                        <*> return v
 
 -- | Conduit that serializes JSON documents for sending to the network.
 encodeConduit :: (ToJSON a, Monad m) => Conduit a m ByteString
-encodeConduit = CL.map (L8.toStrict . encode)
-
--- | Conduit for outgoing JSON-RPC messages.
--- Adds an id to requests whose id is ‘IdNull’.
--- Tracks all sent requests to match corresponding responses.
-outConduit :: MonadIO m
-           => Session qo ri
-           -> Conduit (OutgoingMsg qo ri ro no) m (OutgoingMsg qo ri ro no)
-outConduit qs = await >>= \nqM -> case nqM of
-    Nothing -> return ()
-    Just (OutgoingReq q p) -> do
-        msg <- liftIO . atomically $ addReq q p
-        yield msg
-        outConduit qs
-    Just msg -> yield msg >> outConduit qs
-  where
-    addReq q p = case getReqId q of
-        IdNull -> do
-            i <- readTVar $ lastId qs
-            h <- readTVar $ sentRequests qs
-            let i'  = succ i
-                q' = q { getReqId = i' }
-                h'  = M.insert i' (q', p) h
-            writeTVar (lastId qs) i'
-            writeTVar (sentRequests qs) h'
-            return (OutgoingReq q' p)
-        i -> do
-            h <- readTVar (sentRequests qs)
-            writeTVar (sentRequests qs) (M.insert i (q, p) h)
-            return (OutgoingReq q p)
+encodeConduit = CL.map $ L8.toStrict . encode
 
 -- | Conduit to decode incoming JSON-RPC messages.
-inConduit :: (FromRequest qi, FromResponse ri, FromNotif ni, MonadIO m)
-          => Ver                          -- ^ JSON-RPC version
-          -> Session qo ri                -- ^ JSON-RPC session
-          -> Respond qi ro
-          -> TBMChan (OutgoingMsg qo ri ro no)
-          -> Conduit ByteString m (IncomingMsg ni)
-          -- ^ Decoded incoming messages
-inConduit ver qs respond out = evalStateT loop Nothing where
-    loop = lift await >>= maybe flush process where
-        flush = get >>= \kM -> maybe (return ()) (\k -> handle (k B.empty)) kM
-        process = runParser >=> handle
-        runParser ck = maybe (parse json' ck) ($ ck) <$> get <* put Nothing
+parseMessages :: Monad m
+              => Ver -> Conduit ByteString m (Either Error Message)
+parseMessages ver = evalStateT loop Nothing where
+    loop = lift await >>= maybe flush process
 
-        handle (Fail {}) = do
-            let res = OutgoingError $ ErrorMsg ver (errorParse Null) IdNull
-            liftIO . atomically $ writeTBMChan out res
-            loop
-        handle (Partial k) = put (Just k) >> loop
-        handle (Done rest v) = do
-            msgM <- liftIO . atomically $ decodeSTM v
-            case msgM of
-                Nothing -> return ()
-                Just (MsgRequest (Request w _ q i)) -> liftIO $ do
-                    rE <- respond q
-                    let res = case rE of
-                            Left e -> OutgoingError $ ErrorMsg w e i
-                            Right r -> OutgoingRes $ Response w r i
-                    atomically $ writeTBMChan out res
-                Just (MsgError e) ->
-                    lift . yield . Left $ getErrObj e
-                Just (MsgNotif n) ->
-                    lift . yield . Right $ getNotifParams n
-                _ -> undefined
-            if B.null rest then loop else process rest
+    flush = get >>= \kM -> case kM of Nothing -> return ()
+                                      Just k  -> handle (k B.empty)
+    process = runParser >=> handle
 
-    decodeSTM v = do
-        h <- readTVar (sentRequests qs)
-        case parseEither (topParse h) v of
-            Left s -> do
-                writeTBMChan out $ OutgoingError $
-                    ErrorMsg ver (errorParse $ toJSON s) IdNull
-                return Nothing
-            Right x -> case x of
-                Right (MsgResponse rs) -> do
-                    p <- promiseSTM h (getResId rs)
-                    putTMVar p . Right $ getResult rs
-                    return Nothing
-                Right e@(MsgError m) -> case getErrId m of
-                    IdNull -> return $ Just e
-                    i -> do p <- promiseSTM h i
-                            putTMVar p (Left $ getErrObj m)
-                            return Nothing
-                Right n@(MsgNotif   _) -> return $ Just n
-                Right q@(MsgRequest _) -> return $ Just q
-                Left e -> writeTBMChan out (OutgoingError e) >> return Nothing
-      where
-        promiseSTM h i = do
-            let (_, p) = fromJust $ i `M.lookup` h
-            writeTVar (sentRequests qs) (M.delete i h)
-            return p
+    runParser ck = maybe (parse json' ck) ($ ck) <$> get <* put Nothing
 
-        topParse h w  =  parseReq w
-                     <|> parseNot w
-                     <|> parseRes h w
-                     <|> return (Left $ ErrorMsg ver (errorInvalid w) IdNull)
+    handle (Fail {}) = do
+        lift . yield . Left $ Error ver (errorParse ver Null) IdNull
+        loop
+    handle (Partial k) = put (Just k) >> loop
+    handle (Done rest v) = do
+        let msg = decodeJsonRpc v
+        lift $ yield msg
+        if B.null rest then loop else process rest
 
-        parseReq w = flip fmap (parseRequest w) $ \rqE -> case rqE of
-            Left   e -> Left e
-            Right rq -> Right $ MsgRequest rq
+    decodeJsonRpc v = case parseMaybe parseJSON v of
+        Just msg -> Right msg
+        Nothing -> Left $ Error ver (errorInvalid ver v) IdNull
 
-        parseNot w = flip fmap (parseNotif w) $ \rnE -> case rnE of
-            Left   e -> Left e
-            Right rn -> Right $ MsgNotif rn
+processIncoming :: (FromRequest q, ToJSON r)
+                => Respond q IO r -> JsonRpcT IO ()
+processIncoming r = do
+    i <- reader inCh
+    o <- reader outCh
+    n <- reader notifCh
+    s <- reader sentReqs
+    v <- reader rpcVer
+    join . liftIO . atomically $ readTBMChan i >>= \inc -> case inc of
+        Nothing -> return $ return ()
+        Just (Left e) -> do
+            writeTBMChan o (MsgError e)
+            return $ processIncoming r
+        Just (Right (MsgNotif t)) ->
+            writeTBMChan n (Right t) >> return (processIncoming r)
+        Just (Right (MsgRequest q)) -> return $ do
+            msg <- either MsgError MsgResponse <$> liftIO (buildResponse r q)
+            liftIO . atomically $ writeTBMChan o msg
+            processIncoming r
+        Just (Right (MsgResponse res@(Response _ _ x))) -> do
+            m <- readTVar s
+            case x `M.lookup` m of
+                Nothing ->
+                    writeTBMChan o . MsgError $ Error v (errorId v x) IdNull
+                Just p ->
+                    writeTVar s (x `M.delete` m) >> putTMVar p (Right res)
+            return $ processIncoming r
+        Just (Right (MsgError err@(Error _ _ IdNull))) -> do
+            writeTBMChan n $ Left err
+            return $ processIncoming r
+        Just (Right (MsgError err@(Error _ _ x))) -> do
+            m <- readTVar s
+            case x `M.lookup` m of
+                Nothing ->
+                    writeTBMChan o . MsgError $ Error v (errorId v x) IdNull
+                Just p ->
+                    writeTVar s (x `M.delete` m) >> putTMVar p (Left err)
+            return $ processIncoming r
 
-        parseRes h = withObject "response" $ \o -> do
-            r <- o .:? "result" .!= Null
-            e <- o .:? "error"  .!= Null
-            when (r == Null && e == Null) mzero
-            i <- o .:? "id" .!= IdNull
-            j <- o .:? "jsonrpc"
-            let ver' = if j == Just ("2.0" :: Text) then V2 else V1
-            case i of
-                IdNull -> Right . MsgError <$> parseJSON (Object o)
-                _ -> case i `M.lookup` h of
-                    Nothing -> return . Left $ ErrorMsg ver' (errorId i) i
-                    Just (rq, _) -> do
-                        rsE <- parseResponse rq (Object o)
-                        return $ case rsE of
-                            Left  er -> Right $ MsgError    er
-                            Right rs -> Right $ MsgResponse rs
-
-sendRequest :: (ToJSON qo, ToRequest qo, FromResponse ri, MonadIO m)
-            => qo
-            -> JsonRpcT qo ri ni qi ro no m (STM (Either ErrorObj ri))
+-- | Send request. return Nothing if could not parse response.
+sendRequest :: (ToJSON q, ToRequest q, FromResponse r, MonadIO m)
+            => q -> JsonRpcT m (STM (Either ErrorObj (Maybe r)))
 sendRequest q = do
     o <- reader outCh
     v <- reader rpcVer
-    let req = buildRequest v q
+    l <- reader lastId
+    s <- reader sentReqs
     p <- liftIO . atomically $ do
         p <- newEmptyTMVar 
-        writeTBMChan o $ OutgoingReq req p
+        i <- succ <$> readTVar l
+        m <- readTVar s
+        let req = buildRequest v q i
+        writeTVar s $ M.insert i p m
+        writeTBMChan o $ MsgRequest req 
+        writeTVar l i
         return p
-    return $ takeTMVar p
+    return $ takeTMVar p >>= \pE -> case pE of
+        Left e -> return . Left $ getErrObj e
+        Right y@(Response ver r _) -> 
+            case fromResponse (requestMethod q) y of
+                Nothing -> do
+                    let err = MsgError $ Error ver (errorInvalid ver r) IdNull
+                    writeTBMChan o err
+                    return $ Right Nothing
+                Just x -> return . Right $ Just x
 
-sendNotif :: (ToJSON no, ToNotif no, Monad m)
-          => no
-          -> JsonRpcT qo ri ni qi ro no m (STM ())
+sendNotif :: (ToJSON no, ToNotif no, Monad m) => no -> JsonRpcT m (STM ())
 sendNotif n = do
     o <- reader outCh
     v <- reader rpcVer
     let notif = buildNotif v n
-    return $ writeTBMChan o (OutgoingNotif notif)
+    return $ writeTBMChan o (MsgNotif notif)
 
--- | Receive requests or notifications from peer.
+-- | Receive notifications from peer.
 -- Returns Nothing if incoming channel is closed and empty.
-receive :: Monad m
-        => JsonRpcT qo ri ni qi ro no m (STM (Maybe (IncomingMsg ni)))
-receive = liftM readTBMChan $ reader inCh
+-- Notification is Nothing if it failed to parse.
+receiveNotif :: (Monad m, FromNotif n)
+             => JsonRpcT m (STM (Maybe (Either ErrorObj (Maybe n))))
+receiveNotif = do
+    c <- reader notifCh
+    o <- reader outCh
+    return $ readTBMChan c >>= \nM -> case nM of
+        Nothing -> return Nothing
+        Just (Left e) -> return . Just . Left $ getErrObj e
+        Just (Right n@(Notif v _ p)) -> case fromNotif n of
+            Nothing -> do
+                let err = MsgError $ Error v (errorParse v p) IdNull
+                writeTBMChan o err
+                return . Just $ Right Nothing
+            Just x -> return . Just . Right $ Just x
 
 -- | Will create JSON-RPC conduits around 'ByteString' conduits from
 -- a transport layer.
-runJsonRpcT :: ( FromRequest qi, FromNotif ni, FromResponse ri
-               , ToJSON qo, ToJSON no, ToJSON ro )
-            => Ver                             -- ^ JSON-RPC version
-            -> Sink ByteString IO ()           -- ^ Sink to send messages
-            -> Source IO ByteString            -- ^ Source of incoming messages
-            -> Respond qi ro                   -- ^ Respond to incoming requests
-            -> JsonRpcT qo ri ni qi ro no IO a -- ^ JSON-RPC action
-            -> IO a                            -- ^ Output of action
-runJsonRpcT ver snk src respond f = do
-    (qs, ac) <- liftIO . atomically $ do
-        qs <- initSession
-        ac <- AppChans <$> newTBMChan 128 <*> newTBMChan 128 <*> return ver
-        return (qs, ac)
-    let inSnk  = sinkTBMChan (inCh ac) True
-        outSrc = sourceTBMChan (outCh ac)
-    withAsync (inThread qs inSnk $ outCh ac) $ const $
-        withAsync (outThread qs outSrc) $ const $ runReaderT f ac
+runJsonRpcT :: (FromRequest q, ToJSON r)
+            => Ver                     -- ^ JSON-RPC version
+            -> Respond q IO r          -- ^ Respond to incoming requests
+            -> Sink ByteString IO ()   -- ^ Sink to send messages
+            -> Source IO ByteString    -- ^ Source of incoming messages
+            -> JsonRpcT IO a           -- ^ JSON-RPC action
+            -> IO a                    -- ^ Output of action
+runJsonRpcT ver r snk src f = do
+    qs <- atomically $ initSession ver
+    let inSnk  = sinkTBMChan (inCh qs) True
+        outSrc = sourceTBMChan (outCh qs)
+    withAsync (fromNet inSnk) $ const $
+        withAsync (toNet outSrc) $ const $
+            withAsync (runReaderT (processIncoming r) qs) $ const $
+                runReaderT f qs
   where
-    inThread qs i o = src $= inConduit ver qs respond o $$ i
-    outThread qs o = o $= outConduit qs $= encodeConduit $$ snk
+    fromNet inSnk = src $= parseMessages ver $$ inSnk
+    toNet outSrc = outSrc $= encodeConduit $$ snk
+
+
+cr :: Monad m => Conduit ByteString m ByteString
+cr = CL.map (`B8.snoc` '\n')
+
+ln :: Monad m => Conduit ByteString m ByteString
+ln = await >>= \bsM -> case bsM of
+    Nothing -> return ()
+    Just bs -> let (l, ls) = B8.break (=='\n') bs in case ls of
+        "" -> await >>= \bsM' -> case bsM' of
+            Nothing  -> unless (B8.null l) $ yield l
+            Just bs' -> leftover (bs `B8.append` bs') >> ln
+        _  -> case l of
+            "" -> leftover (B8.tail ls) >> ln
+            _  -> leftover (B8.tail ls) >> yield l >> ln
+
 
 -- | JSON-RPC-over-TCP client.
 jsonRpcTcpClient
-    :: ( FromRequest qi, FromNotif ni, FromResponse ri
-       , ToJSON qo, ToJSON no, ToJSON ro )
-    => Ver                             -- ^ JSON-RPC version
-    -> ClientSettings                  -- ^ Connection settings
-    -> Respond qi ro                   -- ^ Respond to incoming requests
-    -> JsonRpcT qo ri ni qi ro no IO a -- ^ JSON-RPC action
-    -> IO a                            -- ^ Output of action
-jsonRpcTcpClient ver cs respond f = runTCPClient cs $ \ad ->
-    runJsonRpcT ver (cr =$ appSink ad) (appSource ad $= ln) respond f
-  where
-    cr = CL.map (`B8.snoc` '\n')
-    ln = await >>= \bsM -> case bsM of
-        Nothing -> return ()
-        Just bs -> let (l, ls) = B8.break (=='\n') bs in case ls of
-            "" -> await >>= \bsM' -> case bsM' of
-                Nothing  -> unless (B8.null l) $ yield l
-                Just bs' -> leftover (bs `B8.append` bs') >> ln
-            _  -> case l of
-                "" -> leftover (B8.tail ls) >> ln
-                _  -> leftover (B8.tail ls) >> yield l >> ln
+    :: (FromRequest q, ToJSON r)
+    => Ver             -- ^ JSON-RPC version
+    -> ClientSettings  -- ^ Connection settings
+    -> Respond q IO r  -- ^ Respond to incoming requests
+    -> JsonRpcT IO a   -- ^ JSON-RPC action
+    -> IO a            -- ^ Output of action
+jsonRpcTcpClient ver cs r f = runTCPClient cs $ \ad ->
+    runJsonRpcT ver r (cr =$ appSink ad) (appSource ad $= ln) f
 
 -- | JSON-RPC-over-TCP server.
 jsonRpcTcpServer
-    :: ( FromRequest qi, FromNotif ni, FromResponse ri
-       , ToJSON qo, ToJSON no, ToJSON ro )
-    => Ver                        -- ^ JSON-RPC version
-    -> ServerSettings             -- ^ Connection settings
-    -> Respond qi ro                   -- ^ Respond to incoming requests
-    -> JsonRpcT qo ri ni qi ro no IO ()
-    -- ^ JSON-RPC action to perform on connecting client thread
+    :: (FromRequest q, ToJSON r)
+    => Ver             -- ^ JSON-RPC version
+    -> ServerSettings  -- ^ Connection settings
+    -> Respond q IO r  -- ^ Respond to incoming requests
+    -> JsonRpcT IO ()  -- ^ Action to perform on connecting client thread
     -> IO ()
 jsonRpcTcpServer ver ss r f = runTCPServer ss $ \cl ->
-    runJsonRpcT ver (CL.map (`B8.snoc` '\n') =$ appSink cl) (appSource cl) r f
+    runJsonRpcT ver r (cr =$ appSink cl) (appSource cl $= ln) f
 
 -- | Dummy server when not expecting client to send anything but requests.
-dummySrv :: (MonadIO m) => JsonRpcT qo ri () qi ro no m ()
-dummySrv = forever $ receive >>= liftIO . atomically
+dummySrv :: MonadIO m => JsonRpcT m ()
+dummySrv = forever $ do
+    n <- receiveNotif
+    liftIO (atomically n :: IO (Maybe (Either ErrorObj (Maybe ()))))
