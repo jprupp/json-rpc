@@ -375,7 +375,7 @@ instance ToJSON Id where
 
 data Ver = V1 -- ^ JSON-RPC 1.0
          | V2 -- ^ JSON-RPC 2.0
-         deriving (Eq, Show, Read)
+         deriving (Eq, Show, Read, Generic)
 
 instance NFData Ver where
     rnf v = v `seq` ()
