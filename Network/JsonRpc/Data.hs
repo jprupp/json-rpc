@@ -31,8 +31,8 @@ module Network.JsonRpc.Data
 , buildNotif
 
   -- * Errors
+, RpcError(..)
 , ErrorObj(..)
-, Error(..)
 , fromError
   -- ** Error Messages
 , errorParse
@@ -54,7 +54,7 @@ import qualified Data.ByteString.Lazy as L
 import Control.DeepSeq
 import Control.Monad
 import Data.Aeson (encode)
-import Data.Aeson.Types hiding (Error)
+import Data.Aeson.Types
 import Data.Hashable (Hashable)
 import Data.Text (Text)
 import Data.Text.Encoding
@@ -176,12 +176,12 @@ instance FromJSON Response where
 buildResponse :: (Monad m, FromRequest q, ToJSON r)
               => Respond q m r
               -> Request
-              -> m (Either Error Response)
+              -> m (Either RpcError Response)
 buildResponse f req@(Request v _ p i) = case fromRequest req of
-    Nothing -> return . Left $ Error v (errorInvalid p) i
+    Nothing -> return . Left $ RpcError v (errorInvalid p) i
     Just q -> do
         rE <- f q
-        return $ either (\e -> Left $ Error v e i)
+        return $ either (\e -> Left $ RpcError v e i)
                         (\r -> Right $ Response v (toJSON r) i) rE
 
 
@@ -257,17 +257,9 @@ data ErrorObj = ErrorObj  { getErrMsg  :: !String    -- ^ Message
               | ErrorVal  { getErrData :: !Value  }  -- ^ Error data
               deriving (Show, Eq)
 
-data Error = Error { getErrVer  :: !Ver              -- ^ Version
-                   , getErrObj  :: !ErrorObj         -- ^ Object
-                   , getErrId   :: !Id               -- ^ Error id
-                   } deriving (Eq, Show)
-
 instance NFData ErrorObj where
     rnf (ErrorObj m c d) = rnf m `seq` rnf c `seq` rnf d
     rnf (ErrorVal v) = rnf v
-
-instance NFData Error where
-    rnf (Error v o i) = rnf v `seq` rnf o `seq` rnf i
 
 instance FromJSON ErrorObj where
     parseJSON Null = mzero
@@ -280,26 +272,34 @@ instance FromJSON ErrorObj where
         p2 = return $ ErrorVal v
     parseJSON v = return $ ErrorVal v
 
-instance FromJSON Error where
-    parseJSON = withObject "error" $ \o -> do
-        v <- parseVer o
-        e <- o .: "error"
-        i <- o .:? "id" .!= IdNull
-        return $ Error v e i
-
-fromError :: ErrorObj -> String
-fromError (ErrorObj m _ _) = m
-fromError (ErrorVal v) = T.unpack $ decodeUtf8 $ L.toStrict $ encode v
-
 instance ToJSON ErrorObj where
     toJSON (ErrorObj s i d) = object $ ["message" .= s, "code" .= i]
         ++ if d == Null then [] else ["data" .= d]
     toJSON (ErrorVal v) = v
 
-instance ToJSON Error where
-    toJSON (Error V1 o i) =
+fromError :: ErrorObj -> String
+fromError (ErrorObj m _ _) = m
+fromError (ErrorVal v) = T.unpack $ decodeUtf8 $ L.toStrict $ encode v
+
+data RpcError = RpcError { getErrVer  :: !Ver        -- ^ Version
+                         , getErrObj  :: !ErrorObj   -- ^ Object
+                         , getErrId   :: !Id         -- ^ Error id
+                         } deriving (Eq, Show)
+
+instance NFData RpcError where
+    rnf (RpcError v o i) = rnf v `seq` rnf o `seq` rnf i
+
+instance FromJSON RpcError where
+    parseJSON = withObject "error" $ \o -> do
+        v <- parseVer o
+        e <- o .: "error"
+        i <- o .:? "id" .!= IdNull
+        return $ RpcError v e i
+
+instance ToJSON RpcError where
+    toJSON (RpcError V1 o i) =
         object ["id" .= i, "result" .= Null, "error" .= o]
-    toJSON (Error V2 o i) =
+    toJSON (RpcError V2 o i) =
         object ["id" .= i, "error" .= o, jr2]
 
 -- | Parse error.
@@ -332,7 +332,7 @@ data Message
     = MsgRequest   { getMsgRequest  :: !Request  }
     | MsgResponse  { getMsgResponse :: !Response }
     | MsgNotif     { getMsgNotif    :: !Notif    }
-    | MsgError     { getMsgError    :: !Error }
+    | MsgError     { getMsgError    :: !RpcError }
     deriving (Eq, Show)
 
 instance NFData Message where

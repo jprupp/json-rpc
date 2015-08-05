@@ -56,9 +56,14 @@ test-suite test-json-rpc
                         Network.JsonRpc.Arbitrary
   build-depends:        base                        >= 4.6      && < 5,
                         aeson                       >= 0.7      && < 0.9,
+                        async                       >= 2.0      && < 2.1,
+                        bytestring                  >= 0.10     && < 0.11,
                         json-rpc,
+                        mtl                         >= 2.1      && < 2.3,
                         text                        >= 0.11     && < 1.3,
                         unordered-containers        >= 0.2      && < 0.3,
+                        stm                         >= 2.4      && < 2.5,
+                        stm-conduit                 >= 2.5      && < 2.6,
                         QuickCheck                  >= 2.6      && < 2.8,
                         test-framework              >= 0.8      && < 0.9,
                         test-framework-quickcheck2  >= 0.3      && < 0.4

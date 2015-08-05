@@ -18,7 +18,7 @@ import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.Trans.State
-import Data.Aeson hiding (Error)
+import Data.Aeson
 import Data.Aeson.Types (parseMaybe)
 import Data.Attoparsec.ByteString
 import Data.ByteString (ByteString)
@@ -34,12 +34,12 @@ import Data.Conduit.TMChan
 import Network.JsonRpc.Data
 
 -- | Map of ids to corresponding requests and promises of responses.
-type SentRequests = HashMap Id (TMVar (Either Error Response))
+type SentRequests = HashMap Id (TMVar (Either RpcError Response))
 
 -- | Conduits for sending and receiving JSON-RPC messages.
-data Session = Session { inCh     :: TBMChan (Either Error Message)
+data Session = Session { inCh     :: TBMChan (Either RpcError Message)
                        , outCh    :: TBMChan Message
-                       , notifCh  :: TBMChan (Either Error Notif)
+                       , notifCh  :: TBMChan (Either RpcError Notif)
                        , lastId   :: TVar Id
                        , sentReqs :: TVar SentRequests
                        , rpcVer   :: Ver
@@ -62,7 +62,7 @@ encodeConduit = CL.map $ L8.toStrict . encode
 
 -- | Conduit to decode incoming JSON-RPC messages.
 parseMessages :: Monad m
-              => Ver -> Conduit ByteString m (Either Error Message)
+              => Ver -> Conduit ByteString m (Either RpcError Message)
 parseMessages ver = evalStateT loop Nothing where
     loop = lift await >>= maybe flush process
 
@@ -73,7 +73,7 @@ parseMessages ver = evalStateT loop Nothing where
     runParser ck = maybe (parse json' ck) ($ ck) <$> get <* put Nothing
 
     handle (Fail {}) = do
-        lift . yield . Left $ Error ver (errorParse Null) IdNull
+        lift . yield . Left $ RpcError ver (errorParse Null) IdNull
         loop
     handle (Partial k) = put (Just k) >> loop
     handle (Done rest v) = do
@@ -83,7 +83,7 @@ parseMessages ver = evalStateT loop Nothing where
 
     decodeJsonRpc v = case parseMaybe parseJSON v of
         Just msg -> Right msg
-        Nothing -> Left $ Error ver (errorInvalid v) IdNull
+        Nothing -> Left $ RpcError ver (errorInvalid v) IdNull
 
 processIncoming :: (FromRequest q, ToJSON r)
                 => Respond q IO r -> JsonRpcT IO ()
@@ -108,18 +108,18 @@ processIncoming r = do
             m <- readTVar s
             case x `M.lookup` m of
                 Nothing ->
-                    writeTBMChan o . MsgError $ Error v (errorId x) IdNull
+                    writeTBMChan o . MsgError $ RpcError v (errorId x) IdNull
                 Just p ->
                     writeTVar s (x `M.delete` m) >> putTMVar p (Right res)
             return $ processIncoming r
-        Just (Right (MsgError err@(Error _ _ IdNull))) -> do
+        Just (Right (MsgError err@(RpcError _ _ IdNull))) -> do
             writeTBMChan n $ Left err
             return $ processIncoming r
-        Just (Right (MsgError err@(Error _ _ x))) -> do
+        Just (Right (MsgError err@(RpcError _ _ x))) -> do
             m <- readTVar s
             case x `M.lookup` m of
                 Nothing ->
-                    writeTBMChan o . MsgError $ Error v (errorId x) IdNull
+                    writeTBMChan o . MsgError $ RpcError v (errorId x) IdNull
                 Just p ->
                     writeTVar s (x `M.delete` m) >> putTMVar p (Left err)
             return $ processIncoming r
@@ -146,7 +146,7 @@ sendRequest q = do
         Right y@(Response ver r _) -> 
             case fromResponse (requestMethod q) y of
                 Nothing -> do
-                    let err = MsgError $ Error ver (errorInvalid r) IdNull
+                    let err = MsgError $ RpcError ver (errorInvalid r) IdNull
                     writeTBMChan o err
                     return $ Right Nothing
                 Just x -> return . Right $ Just x
@@ -171,7 +171,7 @@ receiveNotif = do
         Just (Left e) -> return . Just . Left $ getErrObj e
         Just (Right n@(Notif v _ p)) -> case fromNotif n of
             Nothing -> do
-                let err = MsgError $ Error v (errorParse p) IdNull
+                let err = MsgError $ RpcError v (errorParse p) IdNull
                 writeTBMChan o err
                 return . Just $ Right Nothing
             Just x -> return . Just . Right $ Just x

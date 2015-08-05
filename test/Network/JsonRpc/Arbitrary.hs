@@ -7,7 +7,7 @@ module Network.JsonRpc.Arbitrary
 ) where
 
 import Control.Applicative
-import Data.Aeson.Types hiding (Error)
+import Data.Aeson.Types
 import qualified Data.HashMap.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -48,8 +48,8 @@ instance Arbitrary ErrorObj where
         , ErrorVal <$> arbitrary
         ]
 
-instance Arbitrary Error where
-    arbitrary = Error <$> arbitrary <*> arbitrary <*> arbitrary
+instance Arbitrary RpcError where
+    arbitrary = RpcError <$> arbitrary <*> arbitrary <*> arbitrary
 
 instance Arbitrary Message where
     arbitrary = oneof
