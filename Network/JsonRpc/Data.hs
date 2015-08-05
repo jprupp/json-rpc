@@ -19,7 +19,6 @@ module Network.JsonRpc.Data
   -- ** Encoding
 , Respond
 , buildResponse
-, dummyRespond
 
   -- * Notifications
 , Notif(..)
@@ -67,11 +66,10 @@ import GHC.Generics (Generic)
 -- Requests
 --
 
--- Request data type.
-data Request = Request { getReqVer      :: !Ver       -- Version
-                       , getReqMethod   :: !Method    -- Method
-                       , getReqParams   :: !Value     -- Params
-                       , getReqId       :: !Id        -- Id
+data Request = Request { getReqVer      :: !Ver
+                       , getReqMethod   :: !Method
+                       , getReqParams   :: !Value
+                       , getReqId       :: !Id
                        } deriving (Eq, Show)
 
 instance NFData Request where
@@ -85,9 +83,8 @@ instance ToJSON Request where
         Null -> ["method" .= m, "params" .= emptyArray, "id" .= i]
         _    -> ["method" .= m, "params" .= p, "id" .= i]
 
--- | Class for data that can be received in JSON-RPC requests.
 class FromRequest q where
-    -- | Parser for params field.
+    -- | Parser for params Value in JSON-RPC request.
     parseParams :: Method -> Maybe (Value -> Parser q)
 
 fromRequest :: FromRequest q => Request -> Maybe q
@@ -105,9 +102,8 @@ instance FromJSON Request where
         guard $ i /= IdNull
         return $ Request v m p i
 
--- | Class for data that can be sent as JSON-RPC requests.
--- Define a method name for each request.
 class ToRequest q where
+    -- | Method associated with request data to build a request object.
     requestMethod :: q -> Method
 
 instance ToRequest Value where
@@ -116,7 +112,6 @@ instance ToRequest Value where
 instance ToRequest () where
     requestMethod = const "json"
 
--- Build JSON-RPC request.
 buildRequest :: (ToJSON q, ToRequest q)
              => Ver             -- ^ JSON-RPC version
              -> q               -- ^ Request data
@@ -130,10 +125,9 @@ buildRequest ver q = Request ver (requestMethod q) (toJSON q)
 -- Responses
 --
 
--- | JSON-RPC response data type
-data Response = Response { getResVer :: !Ver    -- ^ Version
-                         , getResult :: !Value  -- ^ Result
-                         , getResId  :: !Id     -- ^ Id
+data Response = Response { getResVer :: !Ver
+                         , getResult :: !Value
+                         , getResId  :: !Id
                          } deriving (Eq, Show)
 
 instance NFData Response where
@@ -145,18 +139,13 @@ instance ToJSON Response where
     toJSON (Response V2 r i) = object
         [jr2, "id" .= i, "result" .= r]
 
--- | Class for data that can be received inside JSON-RPC responses.
 class FromResponse r where
-    -- | Parse result field from JSON-RPC response.
+    -- | Parser for result Value in JSON-RPC response.
+    -- Method corresponds to request to which this response answers.
     parseResult :: Method -> Maybe (Value -> Parser r)
 
 fromResponse :: FromResponse r => Method -> Response -> Maybe r
 fromResponse m (Response _ r _) = parseResult m >>= flip parseMaybe r
-
-type Respond q m r = q -> m (Either ErrorObj r)
-
-dummyRespond :: Monad m => Respond () m ()
-dummyRespond = const . return $ Right () 
 
 instance FromResponse Value where
     parseResult = const $ Just return
@@ -184,15 +173,16 @@ buildResponse f req@(Request v _ p i) = case fromRequest req of
         return $ either (\e -> Left $ RpcError v e i)
                         (\r -> Right $ Response v (toJSON r) i) rE
 
+type Respond q m r = q -> m (Either ErrorObj r)
+
 
 --
 -- Notifications
 --
 
--- | Class for JSON-RPC notifications.
-data Notif = Notif  { getNotifVer    :: !Ver          -- ^ Version
-                    , getNotifMethod :: !Method       -- ^ Method
-                    , getNotifParams :: !Value        -- ^ Params
+data Notif = Notif  { getNotifVer    :: !Ver
+                    , getNotifMethod :: !Method
+                    , getNotifParams :: !Value
                     } deriving (Eq, Show)
 
 instance NFData Notif where
@@ -206,9 +196,8 @@ instance ToJSON Notif where
         Null -> ["method" .= m, "params" .= emptyArray, "id" .= Null]
         _    -> ["method" .= m, "params" .= p, "id" .= Null]
 
--- | Class for data that can be received in JSON-RPC notifications.
 class FromNotif n where
-    -- | Parser for notification params field
+    -- | Parser for notification params Value.
     parseNotif :: Method -> Maybe (Value -> Parser n)
 
 fromNotif :: FromNotif n => Notif -> Maybe n
@@ -221,7 +210,6 @@ instance FromNotif () where
     parseNotif = const . Just . const $ return ()
 
 instance FromJSON Notif where
-    -- | Parse notifications.
     parseJSON = withObject "notification" $ \o -> do
         (v, i, m, p) <- parseVerIdMethParams o
         guard $ i == IdNull
@@ -236,10 +224,9 @@ instance ToNotif Value where
 instance ToNotif () where
     notifMethod = const "json"
 
--- | Build notifications.
 buildNotif :: (ToJSON n, ToNotif n)
-           => Ver           -- ^ Version
-           -> n             -- ^ Notification data
+           => Ver
+           -> n
            -> Notif
 buildNotif ver n = Notif ver (notifMethod n) (toJSON n)
 
@@ -249,12 +236,12 @@ buildNotif ver n = Notif ver (notifMethod n) (toJSON n)
 -- Errors
 --
 
--- | JSON-RPC errors.
-data ErrorObj = ErrorObj  { getErrMsg  :: !String    -- ^ Message
-                          , getErrCode :: !Int       -- ^ Error code (2.0)
-                          , getErrData :: !Value     -- ^ Error data (2.0)
+-- Error object from JSON-RPC 2.0. ErrorVal for backwards compatibility.
+data ErrorObj = ErrorObj  { getErrMsg  :: !String
+                          , getErrCode :: !Int
+                          , getErrData :: !Value
                           }
-              | ErrorVal  { getErrData :: !Value  }  -- ^ Error data
+              | ErrorVal  { getErrData :: !Value }
               deriving (Show, Eq)
 
 instance NFData ErrorObj where
@@ -281,9 +268,9 @@ fromError :: ErrorObj -> String
 fromError (ErrorObj m _ _) = m
 fromError (ErrorVal v) = T.unpack $ decodeUtf8 $ L.toStrict $ encode v
 
-data RpcError = RpcError { getErrVer  :: !Ver        -- ^ Version
-                         , getErrObj  :: !ErrorObj   -- ^ Object
-                         , getErrId   :: !Id         -- ^ Error id
+data RpcError = RpcError { getErrVer  :: !Ver
+                         , getErrObj  :: !ErrorObj
+                         , getErrId   :: !Id
                          } deriving (Eq, Show)
 
 instance NFData RpcError where
@@ -327,7 +314,6 @@ errorId = ErrorObj "Id not recognized" (-32000) . toJSON
 -- Messages
 --
 
--- | Class for any JSON-RPC message.
 data Message
     = MsgRequest   { getMsgRequest  :: !Request  }
     | MsgResponse  { getMsgResponse :: !Response }
@@ -357,10 +343,8 @@ instance FromJSON Message where
 -- Types
 --
 
--- | JSON-RPC methods in requests and notifications.
 type Method = Text
 
--- | JSON-RPC message id.
 data Id = IdInt { getIdInt :: !Int  }
         | IdTxt { getIdTxt :: !Text }
         | IdNull
@@ -389,7 +373,6 @@ instance ToJSON Id where
     toJSON (IdInt n) = toJSON n
     toJSON IdNull = Null
 
--- | JSON-RPC version
 data Ver = V1 -- ^ JSON-RPC 1.0
          | V2 -- ^ JSON-RPC 2.0
          deriving (Eq, Show, Read)

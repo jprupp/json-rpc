@@ -27,7 +27,7 @@ instance FromResponse TimeRes where
         Nothing -> mzero
       where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
-    parseResult m = Nothing
+    parseResult _ = Nothing
 
 req :: JsonRpcT IO UTCTime
 req = sendRequest TimeReq >>= liftIO . atomically >>= \ts -> case ts of

@@ -1,13 +1,20 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Interface for JSON-RPC.
 module Network.JsonRpc.Interface
-( Respond
-, JsonRpcT
+( -- * Establish JSON-RPC context
+  JsonRpcT
 , runJsonRpcT
+
+  -- * Communicate with remote party
 , sendRequest
 , sendNotif
 , receiveNotif
+
+  -- * Transports
+  -- ** Client
 , jsonRpcTcpClient
+, dummyRespond
+  -- ** Server
 , jsonRpcTcpServer
 , dummySrv
 ) where
@@ -33,10 +40,8 @@ import Data.Conduit.Network
 import Data.Conduit.TMChan
 import Network.JsonRpc.Data
 
--- | Map of ids to corresponding requests and promises of responses.
 type SentRequests = HashMap Id (TMVar (Either RpcError Response))
 
--- | Conduits for sending and receiving JSON-RPC messages.
 data Session = Session { inCh     :: TBMChan (Either RpcError Message)
                        , outCh    :: TBMChan Message
                        , notifCh  :: TBMChan (Either RpcError Notif)
@@ -45,9 +50,10 @@ data Session = Session { inCh     :: TBMChan (Either RpcError Message)
                        , rpcVer   :: Ver
                        }
 
+-- Context for JSON-RPC connection. Connection will remain active as long
+-- as context is maintaned.
 type JsonRpcT = ReaderT Session
 
--- | Initialize JSON-RPC session.
 initSession :: Ver -> STM Session
 initSession v = Session <$> newTBMChan 16
                         <*> newTBMChan 16
@@ -56,11 +62,9 @@ initSession v = Session <$> newTBMChan 16
                         <*> newTVar M.empty
                         <*> return v
 
--- | Conduit that serializes JSON documents for sending to the network.
 encodeConduit :: (ToJSON a, Monad m) => Conduit a m ByteString
 encodeConduit = CL.map $ L8.toStrict . encode
 
--- | Conduit to decode incoming JSON-RPC messages.
 parseMessages :: Monad m
               => Ver -> Conduit ByteString m (Either RpcError Message)
 parseMessages ver = evalStateT loop Nothing where
@@ -124,7 +128,8 @@ processIncoming r = do
                     writeTVar s (x `M.delete` m) >> putTMVar p (Left err)
             return $ processIncoming r
 
--- | Send request. return Nothing if could not parse response.
+-- | Returns Right Nothing if could not parse response. Run output in STM
+-- monad. STM will block until response arrives.
 sendRequest :: (ToJSON q, ToRequest q, FromResponse r, MonadIO m)
             => q -> JsonRpcT m (STM (Either ErrorObj (Maybe r)))
 sendRequest q = do
@@ -151,6 +156,7 @@ sendRequest q = do
                     return $ Right Nothing
                 Just x -> return . Right $ Just x
 
+-- | Send notification. Run output in STM monad. Will not block.
 sendNotif :: (ToJSON no, ToNotif no, Monad m) => no -> JsonRpcT m (STM ())
 sendNotif n = do
     o <- reader outCh
@@ -160,7 +166,8 @@ sendNotif n = do
 
 -- | Receive notifications from peer.
 -- Returns Nothing if incoming channel is closed and empty.
--- Notification is Nothing if it failed to parse.
+-- Result is Right Nothing if it failed to parse notification.
+-- Run output in STM monad. Will not block.
 receiveNotif :: (Monad m, FromNotif n)
              => JsonRpcT m (STM (Maybe (Either ErrorObj (Maybe n))))
 receiveNotif = do
@@ -176,8 +183,8 @@ receiveNotif = do
                 return . Just $ Right Nothing
             Just x -> return . Just . Right $ Just x
 
--- | Will create JSON-RPC conduits around 'ByteString' conduits from
--- a transport layer.
+-- | Create JSON-RPC session around ByteString conduits from transport
+-- layer. When context exits, session stops existing.
 runJsonRpcT :: (FromRequest q, ToJSON r)
             => Ver                     -- ^ JSON-RPC version
             -> Respond q IO r          -- ^ Respond to incoming requests
@@ -213,7 +220,7 @@ ln = await >>= \bsM -> case bsM of
             _  -> leftover (B8.tail ls) >> yield l >> ln
 
 
--- | JSON-RPC-over-TCP client.
+-- | TCP client transport for JSON-RPC.
 jsonRpcTcpClient
     :: (FromRequest q, ToJSON r)
     => Ver             -- ^ JSON-RPC version
@@ -224,7 +231,7 @@ jsonRpcTcpClient
 jsonRpcTcpClient ver cs r f = runTCPClient cs $ \ad ->
     runJsonRpcT ver r (cr =$ appSink ad) (appSource ad $= ln) f
 
--- | JSON-RPC-over-TCP server.
+-- | TCP server transport for JSON-RPC.
 jsonRpcTcpServer
     :: (FromRequest q, ToJSON r)
     => Ver             -- ^ JSON-RPC version
@@ -235,8 +242,14 @@ jsonRpcTcpServer
 jsonRpcTcpServer ver ss r f = runTCPServer ss $ \cl ->
     runJsonRpcT ver r (cr =$ appSink cl) (appSource cl $= ln) f
 
--- | Dummy server when not expecting client to send anything but requests.
+-- | Dummy server for servers not expecting client to send notifications,
+-- that is most cases.
 dummySrv :: MonadIO m => JsonRpcT m ()
 dummySrv = forever $ do
     n <- receiveNotif
     liftIO (atomically n :: IO (Maybe (Either ErrorObj (Maybe ()))))
+
+-- | Respond function for systems that do not reply to requests, as usual
+-- in clients.
+dummyRespond :: Monad m => Respond () m ()
+dummyRespond = const . return $ Right () 
