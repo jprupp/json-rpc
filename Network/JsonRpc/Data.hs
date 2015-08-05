@@ -97,7 +97,7 @@ instance FromRequest Value where
     parseParams = const $ Just return
 
 instance FromRequest () where
-    parseParams = const Nothing
+    parseParams = const . Just . const $ return ()
 
 instance FromJSON Request where
     parseJSON = withObject "request" $ \o -> do
@@ -111,10 +111,10 @@ class ToRequest q where
     requestMethod :: q -> Method
 
 instance ToRequest Value where
-    requestMethod _ = ""
+    requestMethod = const "json"
 
 instance ToRequest () where
-    requestMethod _ = undefined
+    requestMethod = const "json"
 
 -- Build JSON-RPC request.
 buildRequest :: (ToJSON q, ToRequest q)
@@ -162,7 +162,7 @@ instance FromResponse Value where
     parseResult = const $ Just return
 
 instance FromResponse () where
-    parseResult = const Nothing
+    parseResult = const . Just . const $ return ()
 
 instance FromJSON Response where
     parseJSON = withObject "response" $ \o -> do
@@ -178,7 +178,7 @@ buildResponse :: (Monad m, FromRequest q, ToJSON r)
               -> Request
               -> m (Either Error Response)
 buildResponse f req@(Request v _ p i) = case fromRequest req of
-    Nothing -> return . Left $ Error v (errorInvalid v p) i
+    Nothing -> return . Left $ Error v (errorInvalid p) i
     Just q -> do
         rE <- f q
         return $ either (\e -> Left $ Error v e i)
@@ -215,10 +215,10 @@ fromNotif :: FromNotif n => Notif -> Maybe n
 fromNotif (Notif _ m n) = parseNotif m >>= flip parseMaybe n
 
 instance FromNotif Value where
-    parseNotif _ = Just return
+    parseNotif = const $ Just return
 
 instance FromNotif () where
-    parseNotif _ = Nothing
+    parseNotif = const . Just . const $ return ()
 
 instance FromJSON Notif where
     -- | Parse notifications.
@@ -231,10 +231,10 @@ class ToNotif n where
     notifMethod :: n -> Method
 
 instance ToNotif Value where
-    notifMethod _ = ""
+    notifMethod = const "json"
 
 instance ToNotif () where
-    notifMethod _ = undefined
+    notifMethod = const "json"
 
 -- | Build notifications.
 buildNotif :: (ToJSON n, ToNotif n)
@@ -254,7 +254,6 @@ data ErrorObj = ErrorObj  { getErrMsg  :: !String    -- ^ Message
                           , getErrCode :: !Int       -- ^ Error code (2.0)
                           , getErrData :: !Value     -- ^ Error data (2.0)
                           }
-              | ErrorStr  { getErrMsg  :: !String }  -- ^ Message
               | ErrorVal  { getErrData :: !Value  }  -- ^ Error data
               deriving (Show, Eq)
 
@@ -265,22 +264,20 @@ data Error = Error { getErrVer  :: !Ver              -- ^ Version
 
 instance NFData ErrorObj where
     rnf (ErrorObj m c d) = rnf m `seq` rnf c `seq` rnf d
-    rnf (ErrorStr s) = rnf s
     rnf (ErrorVal v) = rnf v
 
 instance NFData Error where
     rnf (Error v o i) = rnf v `seq` rnf o `seq` rnf i
 
 instance FromJSON ErrorObj where
-    parseJSON (Object o) = p1 <|> p2 where
+    parseJSON Null = mzero
+    parseJSON v@(Object o) = p1 <|> p2 where
         p1 = do
             m <- o .: "message"
             c <- o .: "code"
             d <- o .:? "data" .!= Null
             return $ ErrorObj m c d
-        p2 = return $ ErrorVal (Object o)
-    parseJSON (String t) = return $ ErrorStr (T.unpack t)
-    parseJSON Null = mzero
+        p2 = return $ ErrorVal v
     parseJSON v = return $ ErrorVal v
 
 instance FromJSON Error where
@@ -292,46 +289,38 @@ instance FromJSON Error where
 
 fromError :: ErrorObj -> String
 fromError (ErrorObj m _ _) = m
-fromError (ErrorStr s) = s
 fromError (ErrorVal v) = T.unpack $ decodeUtf8 $ L.toStrict $ encode v
 
 instance ToJSON ErrorObj where
     toJSON (ErrorObj s i d) = object $ ["message" .= s, "code" .= i]
         ++ if d == Null then [] else ["data" .= d]
-    toJSON (ErrorStr s) = toJSON s
     toJSON (ErrorVal v) = v
 
 instance ToJSON Error where
     toJSON (Error V1 o i) =
         object ["id" .= i, "result" .= Null, "error" .= o]
     toJSON (Error V2 o i) =
-        object ["id" .= i, "error" .= o]
+        object ["id" .= i, "error" .= o, jr2]
 
 -- | Parse error.
-errorParse :: Ver -> Value -> ErrorObj
-errorParse V2 = ErrorObj "Parse error" (-32700)
-errorParse V1 = const $ ErrorStr "Parse error"
+errorParse :: Value -> ErrorObj
+errorParse = ErrorObj "Parse error" (-32700)
 
 -- | Invalid request.
-errorInvalid :: Ver -> Value -> ErrorObj
-errorInvalid V2 = ErrorObj "Invalid request" (-32600)
-errorInvalid V1 = const $ ErrorStr "Invalid request"
+errorInvalid :: Value -> ErrorObj
+errorInvalid = ErrorObj "Invalid request" (-32600)
 
 -- | Invalid params.
-errorParams :: Ver -> Value -> ErrorObj
-errorParams V2 = ErrorObj "Invalid params" (-32602)
-errorParams V1 = const $ ErrorStr "Invalid params"
+errorParams :: Value -> ErrorObj
+errorParams = ErrorObj "Invalid params" (-32602)
 
 -- | Method not found.
-errorMethod :: Ver -> Method -> ErrorObj
-errorMethod V2 = ErrorObj "Method not found" (-32601) . toJSON
-errorMethod V1 = const $ ErrorStr "Method not found"
+errorMethod :: Method -> ErrorObj
+errorMethod = ErrorObj "Method not found" (-32601) . toJSON
 
 -- | Id not recognized.
-errorId :: Ver -> Id -> ErrorObj
-errorId V2 = ErrorObj "Id not recognized" (-32000) . toJSON
-errorId V1 = const $ ErrorStr "Id not recognized"
-
+errorId :: Id -> ErrorObj
+errorId = ErrorObj "Id not recognized" (-32000) . toJSON
 
 
 --

@@ -73,7 +73,7 @@ parseMessages ver = evalStateT loop Nothing where
     runParser ck = maybe (parse json' ck) ($ ck) <$> get <* put Nothing
 
     handle (Fail {}) = do
-        lift . yield . Left $ Error ver (errorParse ver Null) IdNull
+        lift . yield . Left $ Error ver (errorParse Null) IdNull
         loop
     handle (Partial k) = put (Just k) >> loop
     handle (Done rest v) = do
@@ -83,7 +83,7 @@ parseMessages ver = evalStateT loop Nothing where
 
     decodeJsonRpc v = case parseMaybe parseJSON v of
         Just msg -> Right msg
-        Nothing -> Left $ Error ver (errorInvalid ver v) IdNull
+        Nothing -> Left $ Error ver (errorInvalid v) IdNull
 
 processIncoming :: (FromRequest q, ToJSON r)
                 => Respond q IO r -> JsonRpcT IO ()
@@ -108,7 +108,7 @@ processIncoming r = do
             m <- readTVar s
             case x `M.lookup` m of
                 Nothing ->
-                    writeTBMChan o . MsgError $ Error v (errorId v x) IdNull
+                    writeTBMChan o . MsgError $ Error v (errorId x) IdNull
                 Just p ->
                     writeTVar s (x `M.delete` m) >> putTMVar p (Right res)
             return $ processIncoming r
@@ -119,7 +119,7 @@ processIncoming r = do
             m <- readTVar s
             case x `M.lookup` m of
                 Nothing ->
-                    writeTBMChan o . MsgError $ Error v (errorId v x) IdNull
+                    writeTBMChan o . MsgError $ Error v (errorId x) IdNull
                 Just p ->
                     writeTVar s (x `M.delete` m) >> putTMVar p (Left err)
             return $ processIncoming r
@@ -146,7 +146,7 @@ sendRequest q = do
         Right y@(Response ver r _) -> 
             case fromResponse (requestMethod q) y of
                 Nothing -> do
-                    let err = MsgError $ Error ver (errorInvalid ver r) IdNull
+                    let err = MsgError $ Error ver (errorInvalid r) IdNull
                     writeTBMChan o err
                     return $ Right Nothing
                 Just x -> return . Right $ Just x
@@ -171,7 +171,7 @@ receiveNotif = do
         Just (Left e) -> return . Just . Left $ getErrObj e
         Just (Right n@(Notif v _ p)) -> case fromNotif n of
             Nothing -> do
-                let err = MsgError $ Error v (errorParse v p) IdNull
+                let err = MsgError $ Error v (errorParse p) IdNull
                 writeTBMChan o err
                 return . Just $ Right Nothing
             Just x -> return . Just . Right $ Just x

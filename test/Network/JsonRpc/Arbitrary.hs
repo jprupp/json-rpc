@@ -17,10 +17,10 @@ import Test.QuickCheck.Gen
 
 -- | A pair of a request and its corresponding response.
 -- Id and version should match.
-data ReqRes q r = ReqRes !(Request q) !(Response r)
+data ReqRes = ReqRes !Request !Response
     deriving (Show, Eq)
 
-instance Arbitrary (ReqRes Value Value) where
+instance Arbitrary ReqRes where
     arbitrary = do
         rq <- arbitrary
         rs <- arbitrary
@@ -33,35 +33,31 @@ instance Arbitrary Text where
 instance Arbitrary Ver where
     arbitrary = elements [V1, V2]
 
-instance (Arbitrary q, ToRequest q) => Arbitrary (Request q) where
-    arbitrary = do
-        q <- arbitrary
-        v <- arbitrary
-        let m = requestMethod q
-        Request v m q <$> arbitrary
+instance Arbitrary Request where
+    arbitrary = Request <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
 
-instance (Arbitrary n, ToNotif n) => Arbitrary (Notif n) where
-    arbitrary = do
-        n <- arbitrary
-        v <- arbitrary
-        let m = notifMethod n
-        return $ Notif v m n
+instance Arbitrary Notif where
+    arbitrary = Notif <$> arbitrary <*> arbitrary <*> arbitrary
 
-instance Arbitrary r => Arbitrary (Response r) where
+instance Arbitrary Response where
     arbitrary = Response <$> arbitrary <*> arbitrary <*> arbitrary
 
 instance Arbitrary ErrorObj where
-    arbitrary = ErrorObj <$> arbitrary <*> arbitrary <*> arbitrary
-                         <*> arbitrary <*> arbitrary
+    arbitrary = oneof
+        [ ErrorObj <$> arbitrary <*> arbitrary <*> arbitrary
+        , ErrorVal <$> arbitrary
+        ]
 
-instance ( Arbitrary q, Arbitrary n, Arbitrary r
-         , ToRequest q, ToNotif n, ToJSON r )
-    => Arbitrary (Message q n r)
-  where
-    arbitrary = oneof [ MsgRequest  <$> arbitrary
-                      , MsgNotif    <$> arbitrary
-                      , MsgResponse <$> arbitrary
-                      , MsgError    <$> arbitrary ]
+instance Arbitrary Error where
+    arbitrary = Error <$> arbitrary <*> arbitrary <*> arbitrary
+
+instance Arbitrary Message where
+    arbitrary = oneof
+        [ MsgRequest  <$> arbitrary
+        , MsgNotif    <$> arbitrary
+        , MsgResponse <$> arbitrary
+        , MsgError    <$> arbitrary
+        ]
 
 instance Arbitrary Id where
     arbitrary = oneof [IdInt <$> arbitrary, IdTxt <$> arbitrary]
@@ -71,7 +67,8 @@ instance Arbitrary Value where
         val = oneof [ toJSON <$> (arbitrary :: Gen String)
                     , toJSON <$> (arbitrary :: Gen Int)
                     , toJSON <$> (arbitrary :: Gen Double)
-                    , toJSON <$> (arbitrary :: Gen Bool) ]
+                    , toJSON <$> (arbitrary :: Gen Bool)
+                    ]
         ls   = toJSON <$> listOf val
         obj  = toJSON . M.fromList <$> listOf ps
         ps   = (,) <$> (arbitrary :: Gen String) <*> oneof [val, ls]
