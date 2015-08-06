@@ -48,7 +48,7 @@ respond TimeReq = Right . TimeRes <$> liftIO getCurrentTime
 
 main :: IO ()
 main = runStderrLoggingT $
-    jsonRpcTcpServer V2 (serverSettings 31337 "::1") respond dummySrv
+    jsonRPCTCPServer V2 (serverSettings 31337 "::1") respond dummySrv
 ```
 
 Client Example
@@ -96,6 +96,6 @@ req = sendRequest TimeReq >>= \ts -> case ts of
 
 main :: IO ()
 main = runStderrLoggingT $
-    jsonRpcTcpClient V2 (clientSettings 31337 "::1") dummyRespond .
+    jsonRPCTCPClient V2 (clientSettings 31337 "::1") dummyRespond .
         replicateM_ 4 $ req >>= liftIO . print >> liftIO (threadDelay 1000000)
 ```
