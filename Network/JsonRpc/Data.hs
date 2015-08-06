@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
 -- | Implementation of basic JSON-RPC data types.
-module Network.JSONRPC.Data
+module Network.JsonRpc.Data
 ( -- * Requests
   Request(..)
   -- ** Parsing
@@ -30,7 +30,7 @@ module Network.JSONRPC.Data
 , buildNotif
 
   -- * Errors
-, RPCError(..)
+, Err(..)
 , ErrorObj(..)
 , fromError
   -- ** Error Messages
@@ -166,12 +166,12 @@ instance FromJSON Response where
 buildResponse :: (Monad m, FromRequest q, ToJSON r)
               => Respond q m r
               -> Request
-              -> m (Either RPCError Response)
+              -> m (Either Err Response)
 buildResponse f req@(Request v _ p i) = case fromRequest req of
-    Nothing -> return . Left $ RPCError v (errorInvalid p) i
+    Nothing -> return . Left $ Err v (errorInvalid p) i
     Just q -> do
         rE <- f q
-        return $ either (\e -> Left $ RPCError v e i)
+        return $ either (\e -> Left $ Err v e i)
                         (\r -> Right $ Response v (toJSON r) i) rE
 
 type Respond q m r = q -> m (Either ErrorObj r)
@@ -269,25 +269,25 @@ fromError :: ErrorObj -> String
 fromError (ErrorObj m _ _) = m
 fromError (ErrorVal v) = T.unpack $ decodeUtf8 $ L.toStrict $ encode v
 
-data RPCError = RPCError { getErrVer  :: !Ver
+data Err = Err { getErrVer  :: !Ver
                          , getErrObj  :: !ErrorObj
                          , getErrId   :: !Id
                          } deriving (Eq, Show)
 
-instance NFData RPCError where
-    rnf (RPCError v o i) = rnf v `seq` rnf o `seq` rnf i
+instance NFData Err where
+    rnf (Err v o i) = rnf v `seq` rnf o `seq` rnf i
 
-instance FromJSON RPCError where
+instance FromJSON Err where
     parseJSON = withObject "error" $ \o -> do
         v <- parseVer o
         e <- o .: "error"
         i <- o .:? "id" .!= IdNull
-        return $ RPCError v e i
+        return $ Err v e i
 
-instance ToJSON RPCError where
-    toJSON (RPCError V1 o i) =
+instance ToJSON Err where
+    toJSON (Err V1 o i) =
         object ["id" .= i, "result" .= Null, "error" .= o]
-    toJSON (RPCError V2 o i) =
+    toJSON (Err V2 o i) =
         object ["id" .= i, "error" .= o, jr2]
 
 -- | Parse error.
@@ -319,7 +319,7 @@ data Message
     = MsgRequest   { getMsgRequest  :: !Request  }
     | MsgResponse  { getMsgResponse :: !Response }
     | MsgNotif     { getMsgNotif    :: !Notif    }
-    | MsgError     { getMsgError    :: !RPCError }
+    | MsgError     { getMsgError    :: !Err }
     deriving (Eq, Show)
 
 instance NFData Message where

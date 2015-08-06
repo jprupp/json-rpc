@@ -6,7 +6,7 @@ import Data.Aeson.Types hiding (Error)
 import Data.Conduit.Network
 import Data.Time.Clock
 import Data.Time.Format
-import Network.JSONRPC
+import Network.JsonRpc
 import System.Locale
 
 data TimeReq = TimeReq
@@ -24,4 +24,4 @@ respond TimeReq = Right . TimeRes <$> liftIO getCurrentTime
 
 main :: IO ()
 main = runStderrLoggingT $
-    jsonRPCTCPServer V2 (serverSettings 31337 "::1") respond dummySrv
+    jsonRpcTcpServer V2 (serverSettings 31337 "::1") respond dummySrv

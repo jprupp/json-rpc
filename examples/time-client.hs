@@ -9,7 +9,7 @@ import Data.Conduit.Network
 import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Time.Format
-import Network.JSONRPC
+import Network.JsonRpc
 import System.Locale
 
 data TimeReq = TimeReq
@@ -29,7 +29,7 @@ instance FromResponse TimeRes where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
     parseResult _ = Nothing
 
-req :: MonadLoggerIO m => JSONRPCT m UTCTime
+req :: MonadLoggerIO m => JsonRpcT m UTCTime
 req = sendRequest TimeReq >>= \ts -> case ts of
     Left e -> error $ fromError e
     Right (Just (TimeRes r)) -> return r
@@ -37,5 +37,5 @@ req = sendRequest TimeReq >>= \ts -> case ts of
 
 main :: IO ()
 main = runStderrLoggingT $
-    jsonRPCTCPClient V2 (clientSettings 31337 "::1") dummyRespond .
+    jsonRpcTcpClient V2 (clientSettings 31337 "::1") dummyRespond .
         replicateM_ 4 $ req >>= liftIO . print >> liftIO (threadDelay 1000000)

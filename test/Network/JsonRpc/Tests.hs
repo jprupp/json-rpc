@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE Rank2Types #-}
-module Network.JSONRPC.Tests (tests) where
+module Network.JsonRpc.Tests (tests) where
 
 import Control.Applicative
 import Control.Concurrent.Async.Lifted
@@ -17,8 +17,8 @@ import Data.Aeson
 import Data.Aeson.Types
 import Data.Either
 import Data.Maybe
-import Network.JSONRPC
-import Network.JSONRPC.Arbitrary()
+import Network.JsonRpc
+import Network.JsonRpc.Arbitrary()
 import Test.QuickCheck
 import Test.QuickCheck.Monadic
 import Test.Framework
@@ -46,9 +46,9 @@ tests =
         ]
     , testGroup "JSON-RPC Errors"
         [ testProperty "Check fields"
-            (errFields :: RPCError -> Bool)
+            (errFields :: Err -> Bool)
         , testProperty "Encode/decode"
-            (testEncodeDecode :: RPCError -> Bool)
+            (testEncodeDecode :: Err -> Bool)
         ]
     , testGroup "Network"
         [ testProperty "Test server" serverTest
@@ -82,8 +82,8 @@ checkFieldsRes (Response ver v i) o = do
     o .: "result" >>= guard . (==v)
     return True
 
-checkFieldsErr :: RPCError -> Object -> Parser Bool
-checkFieldsErr (RPCError ver e i) o = do
+checkFieldsErr :: Err -> Object -> Parser Bool
+checkFieldsErr (Err ver e i) o = do
     checkVerId ver i o >>= guard
     o .: "error" >>= guard . (==e)
     return True
@@ -104,7 +104,7 @@ notifFields nt = testFields (checkFieldsNotif nt) nt
 resFields :: Response -> Bool
 resFields rs = testFields (checkFieldsRes rs) rs
 
-errFields :: RPCError -> Bool
+errFields :: Err -> Bool
 errFields er = testFields (checkFieldsErr er) er
 
 serverTest :: ([Request], Ver) -> Property
@@ -122,7 +122,7 @@ serverTest (reqs, ver) = monadicIO $ do
     assert $ params == reverse (results rt)
   where
     r q = return $ Right (q :: Value)
-    srv snk src = runJSONRPCT ver r
+    srv snk src = runJsonRpcT ver r
         (encodeConduit =$ snk) (src =$ decodeConduit ver) dummySrv
     sender bsi = forM_ reqs $ liftIO . atomically .
         writeTBMChan bsi . L.toStrict . encode . MsgRequest
@@ -153,8 +153,8 @@ clientTest (qs, ver) = monadicIO $ do
     assert $ qs == results rt
   where
     r q = return $ Right (q :: Value)
-    srv snk src = runJSONRPCT ver r snk src dummySrv
-    cli snk src = runJSONRPCT ver r snk src . forM qs $ sendRequest
+    srv snk src = runJsonRpcT ver r snk src dummySrv
+    cli snk src = runJsonRpcT ver r snk src . forM qs $ sendRequest
     results = map fromJust . rights
     correct (Right (Just _)) = True
     correct _ = False
