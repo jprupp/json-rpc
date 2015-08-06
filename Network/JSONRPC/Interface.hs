@@ -322,6 +322,8 @@ jsonRPCHTTPClient ver req f = do
             Just msg -> do
                 let req' = req { HC.method = "POST"
                                , HC.requestBody = HC.RequestBodyBS msg
+                               , HC.requestHeaders =
+                                   [("content-type", "application/json-rpc")]
                                }
                 liftIO . HC.withResponse req' man $ \res -> do
                     let body = HC.responseBody res
