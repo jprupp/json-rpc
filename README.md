@@ -24,11 +24,13 @@ This JSON-RPC server returns the current time.
 ``` haskell
 {-# LANGUAGE OverloadedStrings #-}
 import Control.Applicative
+import Control.Monad.Trans
+import Control.Monad.Logger
 import Data.Aeson.Types hiding (Error)
 import Data.Conduit.Network
 import Data.Time.Clock
 import Data.Time.Format
-import Network.JsonRpc
+import Network.JSONRPC
 import System.Locale
 
 data TimeReq = TimeReq
@@ -41,12 +43,12 @@ instance FromRequest TimeReq where
 instance ToJSON TimeRes where
     toJSON (TimeRes t) = toJSON $ formatTime defaultTimeLocale "%c" t
 
-respond :: Respond TimeReq IO TimeRes
-respond TimeReq = Right . TimeRes <$> getCurrentTime
+respond :: (Functor m, MonadLoggerIO m) => Respond TimeReq m TimeRes
+respond TimeReq = Right . TimeRes <$> liftIO getCurrentTime
 
 main :: IO ()
-main = jsonRpcTcpServer V2 (serverSettings 31337 "::1") respond dummySrv
-
+main = runStderrLoggingT $
+    jsonRpcTcpServer V2 (serverSettings 31337 "::1") respond dummySrv
 ```
 
 Client Example
@@ -59,13 +61,14 @@ Corresponding TCP client to get time from server.
 import Control.Concurrent
 import Control.Monad
 import Control.Monad.Trans
+import Control.Monad.Logger
 import Data.Aeson
 import Data.Aeson.Types hiding (Error)
 import Data.Conduit.Network
 import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Time.Format
-import Network.JsonRpc
+import Network.JSONRPC
 import System.Locale
 
 data TimeReq = TimeReq
@@ -85,13 +88,14 @@ instance FromResponse TimeRes where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
     parseResult _ = Nothing
 
-req :: JsonRpcT IO UTCTime
+req :: MonadLoggerIO m => JSONRPCT m UTCTime
 req = sendRequest TimeReq >>= \ts -> case ts of
     Left e -> error $ fromError e
     Right (Just (TimeRes r)) -> return r
     _ -> error "Could not parse response"
 
 main :: IO ()
-main = jsonRpcTcpClient V2 (clientSettings 31337 "::1") dummyRespond .
-    replicateM_ 4 $ req >>= liftIO . print >> liftIO (threadDelay 1000000)
+main = runStderrLoggingT $
+    jsonRpcTcpClient V2 (clientSettings 31337 "::1") dummyRespond .
+        replicateM_ 4 $ req >>= liftIO . print >> liftIO (threadDelay 1000000)
 ```

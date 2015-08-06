@@ -2,13 +2,14 @@
 import Control.Concurrent
 import Control.Monad
 import Control.Monad.Trans
+import Control.Monad.Logger
 import Data.Aeson
 import Data.Aeson.Types hiding (Error)
 import Data.Conduit.Network
 import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Time.Format
-import Network.JsonRpc
+import Network.JSONRPC
 import System.Locale
 
 data TimeReq = TimeReq
@@ -28,12 +29,13 @@ instance FromResponse TimeRes where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
     parseResult _ = Nothing
 
-req :: JsonRpcT IO UTCTime
+req :: MonadLoggerIO m => JSONRPCT m UTCTime
 req = sendRequest TimeReq >>= \ts -> case ts of
     Left e -> error $ fromError e
     Right (Just (TimeRes r)) -> return r
     _ -> error "Could not parse response"
 
 main :: IO ()
-main = jsonRpcTcpClient V2 (clientSettings 31337 "::1") dummyRespond .
-    replicateM_ 4 $ req >>= liftIO . print >> liftIO (threadDelay 1000000)
+main = runStderrLoggingT $
+    jsonRPCTCPClient V2 (clientSettings 31337 "::1") dummyRespond .
+        replicateM_ 4 $ req >>= liftIO . print >> liftIO (threadDelay 1000000)

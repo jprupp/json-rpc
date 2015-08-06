@@ -1,21 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE Rank2Types #-}
-module Network.JsonRpc.Tests (tests) where
+module Network.JSONRPC.Tests (tests) where
 
 import Control.Applicative
-import Control.Concurrent.Async
+import Control.Concurrent.Async.Lifted
 import Control.Concurrent.STM
 import qualified Data.ByteString.Lazy as L
+import Data.Conduit
+import qualified Data.Conduit.List as CL
 import Data.Conduit.TMChan
 import Control.Monad
+import Control.Monad.Logger
 import Control.Monad.Trans
 import Data.Aeson
 import Data.Aeson.Types
 import Data.Either
 import Data.Maybe
-import Network.JsonRpc
-import Network.JsonRpc.Arbitrary()
+import Network.JSONRPC
+import Network.JSONRPC.Arbitrary()
 import Test.QuickCheck
 import Test.QuickCheck.Monadic
 import Test.Framework
@@ -43,9 +46,9 @@ tests =
         ]
     , testGroup "JSON-RPC Errors"
         [ testProperty "Check fields"
-            (errFields :: RpcError -> Bool)
+            (errFields :: RPCError -> Bool)
         , testProperty "Encode/decode"
-            (testEncodeDecode :: RpcError -> Bool)
+            (testEncodeDecode :: RPCError -> Bool)
         ]
     , testGroup "Network"
         [ testProperty "Test server" serverTest
@@ -79,8 +82,8 @@ checkFieldsRes (Response ver v i) o = do
     o .: "result" >>= guard . (==v)
     return True
 
-checkFieldsErr :: RpcError -> Object -> Parser Bool
-checkFieldsErr (RpcError ver e i) o = do
+checkFieldsErr :: RPCError -> Object -> Parser Bool
+checkFieldsErr (RPCError ver e i) o = do
     checkVerId ver i o >>= guard
     o .: "error" >>= guard . (==e)
     return True
@@ -101,24 +104,27 @@ notifFields nt = testFields (checkFieldsNotif nt) nt
 resFields :: Response -> Bool
 resFields rs = testFields (checkFieldsRes rs) rs
 
-errFields :: RpcError -> Bool
+errFields :: RPCError -> Bool
 errFields er = testFields (checkFieldsErr er) er
 
 serverTest :: ([Request], Ver) -> Property
 serverTest (reqs, ver) = monadicIO $ do
-    rt <- run $ do
-        (bso, bsi) <- atomically $ (,) <$> newTBMChan 16 <*> newTBMChan 16
+    rt <- run $ runNoLoggingT $ do
+        (bso, bsi) <- liftIO . atomically $ (,) <$> newTBMChan 16
+                                                <*> newTBMChan 16
         let snk = sinkTBMChan bso False
             src = sourceTBMChan bsi
         withAsync (srv snk src) $ const $
-            withAsync (sender bsi) $ const $ receiver bso []
+            withAsync (sender bsi) $ const $
+                receiver bso []
     assert $ length rt == length reqs
     assert $ null rt || all isJust rt
     assert $ params == reverse (results rt)
   where
     r q = return $ Right (q :: Value)
-    srv snk src = runJsonRpcT ver r snk src dummySrv
-    sender bsi = forM_ reqs $ atomically .
+    srv snk src = runJSONRPCT ver r
+        (encodeConduit =$ snk) (src =$ decodeConduit ver) dummySrv
+    sender bsi = forM_ reqs $ liftIO . atomically .
         writeTBMChan bsi . L.toStrict . encode . MsgRequest
     receiver bso xs = if length xs == length reqs
         then return xs
@@ -132,20 +138,23 @@ serverTest (reqs, ver) = monadicIO $ do
 
 clientTest :: ([Value], Ver) -> Property
 clientTest (qs, ver) = monadicIO $ do
-    rt <- run $ do
-        (bso, bsi) <- atomically $ (,) <$> newTBMChan 16 <*> newTBMChan 16
+    rt <- run $ runNoLoggingT $ do
+        (bso, bsi) <- liftIO . atomically $ (,) <$> newTBMChan 16
+                                                <*> newTBMChan 16
         let snk = sinkTBMChan bso False
             src = sourceTBMChan bsi
             csnk = sinkTBMChan bsi False
             csrc = sourceTBMChan bso
-        withAsync (srv snk src) $ const $ cli csnk csrc
+        withAsync (srv snk src) $ const $ cli
+            (CL.map Right =$ csnk)
+            (csrc $= CL.map Right)
     assert $ length rt == length qs
     assert $ null rt || all correct rt
     assert $ qs == results rt
   where
     r q = return $ Right (q :: Value)
-    srv snk src = runJsonRpcT ver r snk src dummySrv
-    cli snk src = runJsonRpcT ver r snk src . forM qs $ sendRequest
+    srv snk src = runJSONRPCT ver r snk src dummySrv
+    cli snk src = runJSONRPCT ver r snk src . forM qs $ sendRequest
     results = map fromJust . rights
     correct (Right (Just _)) = True
     correct _ = False

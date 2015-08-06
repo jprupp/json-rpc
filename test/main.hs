@@ -1,6 +1,6 @@
 import Test.Framework
-import Network.JsonRpc.Tests
+import Network.JSONRPC.Tests
 
 main :: IO ()
-main = defaultMain (tests)
+main = defaultMain tests
 

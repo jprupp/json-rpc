@@ -1,7 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- | Arbitrary instances and data types for use in test suites.
-module Network.JsonRpc.Arbitrary
+module Network.JSONRPC.Arbitrary
 ( -- * Arbitrary Data
   ReqRes(..)
 ) where
@@ -11,7 +11,7 @@ import Data.Aeson.Types
 import qualified Data.HashMap.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import Network.JsonRpc
+import Network.JSONRPC
 import Test.QuickCheck.Arbitrary
 import Test.QuickCheck.Gen
 
@@ -48,8 +48,8 @@ instance Arbitrary ErrorObj where
         , ErrorVal <$> arbitrary
         ]
 
-instance Arbitrary RpcError where
-    arbitrary = RpcError <$> arbitrary <*> arbitrary <*> arbitrary
+instance Arbitrary RPCError where
+    arbitrary = RPCError <$> arbitrary <*> arbitrary <*> arbitrary
 
 instance Arbitrary Message where
     arbitrary = oneof
