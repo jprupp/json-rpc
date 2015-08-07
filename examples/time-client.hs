@@ -1,3 +1,4 @@
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 import Control.Concurrent
 import Control.Monad
@@ -13,10 +14,11 @@ import Network.JsonRpc
 import System.Locale
 
 data TimeReq = TimeReq
-data TimeRes = TimeRes { timeRes :: UTCTime }
+data TimeRes = TimeRes { timeRes :: UTCTime } deriving Show
 
 instance ToRequest TimeReq where
     requestMethod TimeReq = "time"
+    requestIsNotif = const False
 
 instance ToJSON TimeReq where
     toJSON TimeReq = emptyArray
@@ -29,13 +31,20 @@ instance FromResponse TimeRes where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
     parseResult _ = Nothing
 
-req :: MonadLoggerIO m => JsonRpcT m UTCTime
-req = sendRequest TimeReq >>= \ts -> case ts of
-    Left e -> error $ fromError e
-    Right (Just (TimeRes r)) -> return r
-    _ -> error "Could not parse response"
+req :: MonadLoggerIO m => JsonRpcT m (Either String UTCTime)
+req = do
+    $(logDebug) "sending time request"
+    ts <- sendRequest TimeReq
+    $(logDebug) "received response"
+    case ts of
+        Nothing -> return $ Left "could not parse response"
+        Just (Left e) -> return . Left $ fromError e
+        Just (Right (TimeRes r)) -> return $ Right r
 
 main :: IO ()
 main = runStderrLoggingT $
-    jsonRpcTcpClient V2 (clientSettings 31337 "::1") dummyRespond .
-        replicateM_ 4 $ req >>= liftIO . print >> liftIO (threadDelay 1000000)
+    jsonRpcTcpClient V2 True (clientSettings 31337 "::1") $ do
+        $(logDebug) "sending four time requests one second apart"
+        replicateM_ 4 $ do
+            req >>= liftIO . print
+            liftIO (threadDelay 1000000)

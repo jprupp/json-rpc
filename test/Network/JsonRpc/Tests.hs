@@ -15,7 +15,6 @@ import Control.Monad.Logger
 import Control.Monad.Trans
 import Data.Aeson
 import Data.Aeson.Types
-import Data.Either
 import Data.Maybe
 import Network.JsonRpc
 import Network.JsonRpc.Arbitrary()
@@ -32,23 +31,11 @@ tests =
         , testProperty "Encode/decode"
             (testEncodeDecode :: Request -> Bool)
         ]
-    , testGroup "JSON-RPC Notifications"
-        [ testProperty "Check fields"
-            (notifFields :: Notif -> Bool)
-        , testProperty "Encode/decode"
-            (testEncodeDecode :: Notif -> Bool)
-        ]
     , testGroup "JSON-RPC Responses"
         [ testProperty "Check fields"
             (resFields :: Response -> Bool)
         , testProperty "Encode/decode"
             (testEncodeDecode :: Response -> Bool)
-        ]
-    , testGroup "JSON-RPC Errors"
-        [ testProperty "Check fields"
-            (errFields :: Err -> Bool)
-        , testProperty "Encode/decode"
-            (testEncodeDecode :: Err -> Bool)
         ]
     , testGroup "Network"
         [ testProperty "Test server" serverTest
@@ -56,14 +43,15 @@ tests =
         ]
     ]
 
-checkVerId :: Ver -> Id -> Object -> Parser Bool
+checkVerId :: Ver -> Maybe Id -> Object -> Parser Bool
 checkVerId ver i o = do
     j <- o .:? "jsonrpc"
     guard $ if ver == V2 then j == Just (String "2.0") else isNothing j
-    o .:? "id" .!= IdNull >>= guard . (==i)
+    o .:? "id" >>= guard . (==i)
     return True
 
-checkFieldsReqNotif :: Ver -> Method -> Value -> Id -> Object -> Parser Bool
+checkFieldsReqNotif
+    :: Ver -> Method -> Value -> Maybe Id -> Object -> Parser Bool
 checkFieldsReqNotif ver m v i o = do
     checkVerId ver i o >>= guard
     o .: "method" >>= guard . (==m)
@@ -71,20 +59,20 @@ checkFieldsReqNotif ver m v i o = do
     return True
 
 checkFieldsReq :: Request -> Object -> Parser Bool
-checkFieldsReq (Request ver m v i) = checkFieldsReqNotif ver m v i
-
-checkFieldsNotif :: Notif -> Object -> Parser Bool
-checkFieldsNotif (Notif ver m v) = checkFieldsReqNotif ver m v IdNull
+checkFieldsReq (Request ver m v i) = checkFieldsReqNotif ver m v (Just i)
+checkFieldsReq (Notif   ver m v)   = checkFieldsReqNotif ver m v Nothing
 
 checkFieldsRes :: Response -> Object -> Parser Bool
 checkFieldsRes (Response ver v i) o = do
-    checkVerId ver i o >>= guard
+    checkVerId ver (Just i) o >>= guard
     o .: "result" >>= guard . (==v)
     return True
-
-checkFieldsErr :: Err -> Object -> Parser Bool
-checkFieldsErr (Err ver e i) o = do
-    checkVerId ver i o >>= guard
+checkFieldsRes (ResponseError ver e i) o = do
+    checkVerId ver (Just i) o >>= guard
+    o .: "error" >>= guard . (==e)
+    return True
+checkFieldsRes (OrphanError ver e) o = do
+    checkVerId ver Nothing o >>= guard
     o .: "error" >>= guard . (==e)
     return True
 
@@ -98,63 +86,75 @@ testEncodeDecode r = maybe False (==r) $ parseMaybe parseJSON (toJSON r)
 reqFields :: Request -> Bool
 reqFields rq = testFields (checkFieldsReq rq) rq
 
-notifFields :: Notif -> Bool
-notifFields nt = testFields (checkFieldsNotif nt) nt
-
 resFields :: Response -> Bool
 resFields rs = testFields (checkFieldsRes rs) rs
-
-errFields :: Err -> Bool
-errFields er = testFields (checkFieldsErr er) er
 
 serverTest :: ([Request], Ver) -> Property
 serverTest (reqs, ver) = monadicIO $ do
     rt <- run $ runNoLoggingT $ do
-        (bso, bsi) <- liftIO . atomically $ (,) <$> newTBMChan 16
-                                                <*> newTBMChan 16
+        (bso, bsi) <- liftIO . atomically $
+            (,) <$> newTBMChan 16 <*> newTBMChan 16
         let snk = sinkTBMChan bso False
             src = sourceTBMChan bsi
-        withAsync (srv snk src) $ const $
-            withAsync (sender bsi) $ const $
-                receiver bso []
-    assert $ length rt == length reqs
+        withAsync (server snk src) $ const $ withAsync (sender bsi) $ const $
+            receiver bso []
+    assert $ length rt == length nonotif
     assert $ null rt || all isJust rt
     assert $ params == reverse (results rt)
   where
-    r q = return $ Right (q :: Value)
-    srv snk src = runJsonRpcT ver r
-        (encodeConduit =$ snk) (src =$ decodeConduit ver) dummySrv
+    respond q = return $ Right (q :: Value)
+    server snk src = runJsonRpcT ver False
+        (encodeConduit =$ snk) (src =$ decodeConduit ver) (srv respond)
     sender bsi = forM_ reqs $ liftIO . atomically .
         writeTBMChan bsi . L.toStrict . encode . MsgRequest
-    receiver bso xs = if length xs == length reqs
-        then return xs
-        else liftIO (atomically $ readTBMChan bso) >>= \b -> case b of
-            Just x -> do
-                let res = decodeStrict' x :: Maybe Response
-                receiver bso (res:xs)
-            Nothing -> undefined
-    params = map getReqParams reqs
+    receiver bso xs =
+        if length xs == length nonotif
+            then return xs
+            else liftIO (atomically $ readTBMChan bso) >>= \b -> case b of
+                Just x -> do
+                    let res = decodeStrict' x :: Maybe Response
+                    receiver bso (res:xs)
+                Nothing -> undefined
+    params = map getReqParams nonotif
     results = map $ getResult . fromJust
+    nonotif = flip filter reqs $ \q -> case q of Request{} -> True
+                                                 Notif{} -> False
 
 clientTest :: ([Value], Ver) -> Property
 clientTest (qs, ver) = monadicIO $ do
     rt <- run $ runNoLoggingT $ do
-        (bso, bsi) <- liftIO . atomically $ (,) <$> newTBMChan 16
-                                                <*> newTBMChan 16
+        (bso, bsi) <- liftIO . atomically $
+            (,) <$> newTBMChan 16 <*> newTBMChan 16
         let snk = sinkTBMChan bso False
             src = sourceTBMChan bsi
             csnk = sinkTBMChan bsi False
             csrc = sourceTBMChan bso
-        withAsync (srv snk src) $ const $ cli
+        withAsync (server snk src) $ const $ cli
             (CL.map Right =$ csnk)
             (csrc $= CL.map Right)
     assert $ length rt == length qs
     assert $ null rt || all correct rt
     assert $ qs == results rt
   where
-    r q = return $ Right (q :: Value)
-    srv snk src = runJsonRpcT ver r snk src dummySrv
-    cli snk src = runJsonRpcT ver r snk src . forM qs $ sendRequest
-    results = map fromJust . rights
-    correct (Right (Just _)) = True
+    respond q = return $ Right (q :: Value)
+    server snk src = runJsonRpcT ver False snk src (srv respond)
+    cli snk src = runJsonRpcT ver True snk src . forM qs $ sendRequest
+    results = map $ fromRight . fromJust
+    correct (Just (Right _)) = True
     correct _ = False
+
+srv :: (MonadLoggerIO m, FromRequest q, ToJSON r)
+    => Respond q (JsonRpcT m) r -> JsonRpcT m ()
+srv respond = do
+    qM <- receiveRequest
+    case qM of
+        Nothing -> return ()
+        Just q -> do
+            rM <- buildResponse respond q
+            case rM of
+                Nothing -> srv respond
+                Just r -> sendResponse r >> srv respond
+
+fromRight :: Either a b -> b
+fromRight (Right x) = x
+fromRight _ = undefined

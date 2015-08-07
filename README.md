@@ -23,7 +23,7 @@ This JSON-RPC server returns the current time.
 
 ``` haskell
 {-# LANGUAGE OverloadedStrings #-}
-import Control.Applicative
+{-# LANGUAGE TemplateHaskell #-}
 import Control.Monad.Trans
 import Control.Monad.Logger
 import Data.Aeson.Types hiding (Error)
@@ -38,17 +38,39 @@ data TimeRes = TimeRes { timeRes :: UTCTime }
 
 instance FromRequest TimeReq where
     parseParams "time" = Just $ const $ return TimeReq 
-    parseParams _ = Nothing
+    parseParams _      = Nothing
 
 instance ToJSON TimeRes where
     toJSON (TimeRes t) = toJSON $ formatTime defaultTimeLocale "%c" t
 
-respond :: (Functor m, MonadLoggerIO m) => Respond TimeReq m TimeRes
-respond TimeReq = Right . TimeRes <$> liftIO getCurrentTime
+respond :: MonadLoggerIO m => Respond TimeReq m TimeRes
+respond TimeReq = do
+    t <- liftIO getCurrentTime
+    return . Right $ TimeRes t
 
 main :: IO ()
-main = runStderrLoggingT $
-    jsonRpcTcpServer V2 (serverSettings 31337 "::1") respond dummySrv
+main = runStderrLoggingT $ do
+    let ss = serverSettings 31337 "::1"
+    jsonRpcTcpServer V2 False ss srv
+
+srv :: MonadLoggerIO m => JsonRpcT m ()
+srv = do
+    $(logDebug) "listening for new request"
+    qM <- receiveRequest
+    case qM of
+        Nothing -> do
+            $(logDebug) "closed request channel, exting"
+            return ()
+        Just q -> do
+            $(logDebug) "got request"
+            rM <- buildResponse respond q
+            case rM of
+                Nothing -> do
+                    $(logDebug) "no response for this request"
+                    srv
+                Just r -> do
+                    $(logDebug) "sending response"
+                    sendResponse r >> srv
 ```
 
 Client Example
@@ -57,6 +79,7 @@ Client Example
 Corresponding TCP client to get time from server.
 
 ``` haskell
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 import Control.Concurrent
 import Control.Monad
@@ -72,10 +95,11 @@ import Network.JsonRpc
 import System.Locale
 
 data TimeReq = TimeReq
-data TimeRes = TimeRes { timeRes :: UTCTime }
+data TimeRes = TimeRes { timeRes :: UTCTime } deriving Show
 
 instance ToRequest TimeReq where
     requestMethod TimeReq = "time"
+    requestIsNotif = const False
 
 instance ToJSON TimeReq where
     toJSON TimeReq = emptyArray
@@ -88,14 +112,21 @@ instance FromResponse TimeRes where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
     parseResult _ = Nothing
 
-req :: MonadLoggerIO m => JsonRpcT m UTCTime
-req = sendRequest TimeReq >>= \ts -> case ts of
-    Left e -> error $ fromError e
-    Right (Just (TimeRes r)) -> return r
-    _ -> error "Could not parse response"
+req :: MonadLoggerIO m => JsonRpcT m (Either String UTCTime)
+req = do
+    $(logDebug) "sending time request"
+    ts <- sendRequest TimeReq
+    $(logDebug) "received response"
+    case ts of
+        Nothing -> return $ Left "could not parse response"
+        Just (Left e) -> return . Left $ fromError e
+        Just (Right (TimeRes r)) -> return $ Right r
 
 main :: IO ()
 main = runStderrLoggingT $
-    jsonRpcTcpClient V2 (clientSettings 31337 "::1") dummyRespond .
-        replicateM_ 4 $ req >>= liftIO . print >> liftIO (threadDelay 1000000)
+    jsonRpcTcpClient V2 True (clientSettings 31337 "::1") $ do
+        $(logDebug) "sending four time requests one second apart"
+        replicateM_ 4 $ do
+            req >>= liftIO . print
+            liftIO (threadDelay 1000000)
 ```

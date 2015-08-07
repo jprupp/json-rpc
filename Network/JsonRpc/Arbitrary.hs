@@ -1,10 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 -- | Arbitrary instances and data types for use in test suites.
-module Network.JsonRpc.Arbitrary
-( -- * Arbitrary Data
-  ReqRes(..)
-) where
+module Network.JsonRpc.Arbitrary where
 
 import Control.Applicative
 import Data.Aeson.Types
@@ -15,18 +12,6 @@ import Network.JsonRpc
 import Test.QuickCheck.Arbitrary
 import Test.QuickCheck.Gen
 
--- | A pair of a request and its corresponding response.
--- Id and version should match.
-data ReqRes = ReqRes !Request !Response
-    deriving (Show, Eq)
-
-instance Arbitrary ReqRes where
-    arbitrary = do
-        rq <- arbitrary
-        rs <- arbitrary
-        let rs' = rs { getResId = getReqId rq, getResVer = getReqVer rq }
-        return $ ReqRes rq rs'
-
 instance Arbitrary Text where
     arbitrary = T.pack <$> arbitrary
 
@@ -34,13 +19,18 @@ instance Arbitrary Ver where
     arbitrary = elements [V1, V2]
 
 instance Arbitrary Request where
-    arbitrary = Request <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
-
-instance Arbitrary Notif where
-    arbitrary = Notif <$> arbitrary <*> arbitrary <*> arbitrary
+    arbitrary = oneof
+        [ Request <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
+        , Notif <$> arbitrary <*> arbitrary <*> arbitrary
+        ]
 
 instance Arbitrary Response where
-    arbitrary = Response <$> arbitrary <*> arbitrary <*> arbitrary
+    arbitrary = oneof
+        [ Response <$> arbitrary <*> arbitrary <*> arbitrary
+        , ResponseError <$> arbitrary <*> arbitrary <*> arbitrary
+        , OrphanError <$> arbitrary <*> arbitrary
+        ]
+
 
 instance Arbitrary ErrorObj where
     arbitrary = oneof
@@ -48,15 +38,10 @@ instance Arbitrary ErrorObj where
         , ErrorVal <$> arbitrary
         ]
 
-instance Arbitrary Err where
-    arbitrary = Err <$> arbitrary <*> arbitrary <*> arbitrary
-
 instance Arbitrary Message where
     arbitrary = oneof
         [ MsgRequest  <$> arbitrary
-        , MsgNotif    <$> arbitrary
         , MsgResponse <$> arbitrary
-        , MsgError    <$> arbitrary
         ]
 
 instance Arbitrary Id where
