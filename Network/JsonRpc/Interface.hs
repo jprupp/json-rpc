@@ -27,6 +27,7 @@ module Network.JsonRpc.Interface
 , Session(..)
 , initSession
 , processIncoming
+, sendMessage
 ) where
 
 import Control.Applicative
@@ -253,6 +254,9 @@ sendResponse :: MonadLoggerIO m => Response -> JsonRpcT m ()
 sendResponse r = do
     o <- reader outCh
     liftIO . atomically . writeTBMChan o $ MsgResponse r
+
+sendMessage :: MonadLoggerIO m => Message -> JsonRpcT m ()
+sendMessage msg = reader outCh >>= liftIO . atomically . (`writeTBMChan` msg)
 
 -- | Create JSON-RPC session around conduits from transport
 -- layer. When context exits session disappears.

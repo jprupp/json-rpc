@@ -40,6 +40,7 @@ tests =
     , testGroup "Network"
         [ testProperty "Test server" serverTest
         , testProperty "Test client" clientTest
+        , testProperty "Test notifications" notifTest
         ]
     ]
 
@@ -89,15 +90,19 @@ reqFields rq = testFields (checkFieldsReq rq) rq
 resFields :: Response -> Bool
 resFields rs = testFields (checkFieldsRes rs) rs
 
+createChans :: MonadIO m
+            => m ((TBMChan a, TBMChan b), (Sink a m (), Source m b))
+createChans = do
+    (bso, bsi) <- liftIO . atomically $ (,) <$> newTBMChan 16 <*> newTBMChan 16
+    let (snk, src) = (sinkTBMChan bso False, sourceTBMChan bsi)
+    return ((bso, bsi), (snk, src))
+
 serverTest :: ([Request], Ver) -> Property
 serverTest (reqs, ver) = monadicIO $ do
     rt <- run $ runNoLoggingT $ do
-        (bso, bsi) <- liftIO . atomically $
-            (,) <$> newTBMChan 16 <*> newTBMChan 16
-        let snk = sinkTBMChan bso False
-            src = sourceTBMChan bsi
-        withAsync (server snk src) $ const $ withAsync (sender bsi) $ const $
-            receiver bso []
+        ((bso, bsi), (snk, src)) <- createChans
+        withAsync (server snk src) $ const $
+            withAsync (sender bsi) $ const $ receiver bso []
     assert $ length rt == length nonotif
     assert $ null rt || all isJust rt
     assert $ params == reverse (results rt)
@@ -118,16 +123,13 @@ serverTest (reqs, ver) = monadicIO $ do
     params = map getReqParams nonotif
     results = map $ getResult . fromJust
     nonotif = flip filter reqs $ \q -> case q of Request{} -> True
-                                                 Notif{} -> False
+                                                 Notif{}   -> False
 
 clientTest :: ([Value], Ver) -> Property
 clientTest (qs, ver) = monadicIO $ do
     rt <- run $ runNoLoggingT $ do
-        (bso, bsi) <- liftIO . atomically $
-            (,) <$> newTBMChan 16 <*> newTBMChan 16
-        let snk = sinkTBMChan bso False
-            src = sourceTBMChan bsi
-            csnk = sinkTBMChan bsi False
+        ((bso, bsi), (snk, src)) <- createChans
+        let csnk = sinkTBMChan bsi False
             csrc = sourceTBMChan bso
         withAsync (server snk src) $ const $ cli
             (CL.map Right =$ csnk)
@@ -143,6 +145,47 @@ clientTest (qs, ver) = monadicIO $ do
     correct (Just (Right _)) = True
     correct _ = False
 
+notifTest :: ([Request], Ver) -> Property
+notifTest (qs, ver) = monadicIO $ do
+    nt <- run $ runNoLoggingT $ do
+        ((bso, bsi), (snk, src)) <- createChans
+        let csnk = sinkTBMChan bsi False
+            csrc = sourceTBMChan bso
+        (sig, notifs) <- liftIO . atomically $
+            (,) <$> newEmptyTMVar <*> newTVar []
+        withAsync (server snk src sig notifs) $ const $ cli sig
+            (CL.map Right =$ csnk)
+            (csrc $= CL.map Right)
+        liftIO . atomically $ readTVar notifs
+    assert $ length nt == length ntfs
+    assert $ reverse nt == ntfs
+  where
+    respond q = return $ Right (q :: Value)
+    server snk src sig notifs =
+        runJsonRpcT ver False snk src $ process sig notifs
+    process sig notifs = do
+        qM <- receiveRequest
+        case qM of
+            Nothing -> return ()
+            Just q -> do
+                case q of
+                    Notif{} -> liftIO . atomically $
+                        readTVar notifs >>= writeTVar notifs . (q:)
+                    Request{ getReqParams = String "disconnect" } ->
+                        liftIO . atomically $ putTMVar sig ()
+                    Request{} -> return ()
+                rM <- buildResponse respond q
+                case rM of
+                    Nothing -> process sig notifs
+                    Just  r -> sendResponse r >> process sig notifs
+    reqs = map MsgRequest qs
+    cli sig snk src = runJsonRpcT ver True snk src $ do
+        forM_ reqs sendMessage
+        _ <- sendRequest $ String "disconnect"
+            :: JsonRpcT (NoLoggingT IO) (Maybe (Either ErrorObj Value))
+        liftIO . atomically $ takeTMVar sig
+    ntfs = flip filter qs $ \q -> case q of Notif{} -> True; _ -> False
+
 srv :: (MonadLoggerIO m, FromRequest q, ToJSON r)
     => Respond q (JsonRpcT m) r -> JsonRpcT m ()
 srv respond = do
@@ -154,6 +197,7 @@ srv respond = do
             case rM of
                 Nothing -> srv respond
                 Just r -> sendResponse r >> srv respond
+
 
 fromRight :: Either a b -> b
 fromRight (Right x) = x

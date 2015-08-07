@@ -1,5 +1,5 @@
 name:                   json-rpc
-version:                0.6.0.0
+version:                0.6.1.0
 synopsis:               Fully-featured JSON-RPC 2.0 library
 description:
   This JSON-RPC library is fully-compatible with JSON-RPC 2.0 and 1.0. It
@@ -24,7 +24,7 @@ source-repository head
 source-repository this
   type:                 git
   location:             https://github.com/xenog/json-rpc.git
-  tag:                  0.6.0.0
+  tag:                  0.6.1.0
 
 library
   exposed-modules:      Network.JsonRpc,
