@@ -273,9 +273,13 @@ runJsonRpcT ver ignore snk src f = do
     let inSnk  = sinkTBMChan (inCh qs) True
         outSrc = sourceTBMChan (outCh qs)
     withAsync (src $$ inSnk) $ const $
-        withAsync (outSrc $$ snk) $ const $
-            withAsync (runReaderT processIncoming qs) $ const $
-                runReaderT f qs
+        withAsync (outSrc $$ snk) $ \o ->
+            withAsync (runReaderT processIncoming qs) $ const $ do
+                a <- runReaderT f qs
+                liftIO $ do
+                    atomically . closeTBMChan $ outCh qs
+                    _ <- wait o
+                    return a
 
 
 cr :: Monad m => Conduit ByteString m ByteString
