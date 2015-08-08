@@ -1,5 +1,5 @@
 name:                   json-rpc
-version:                0.6.2.0
+version:                0.6.2.1
 synopsis:               Fully-featured JSON-RPC 2.0 library
 description:
   This JSON-RPC library is fully-compatible with JSON-RPC 2.0 and 1.0. It
@@ -24,7 +24,7 @@ source-repository head
 source-repository this
   type:                 git
   location:             https://github.com/xenog/json-rpc.git
-  tag:                  0.6.2.0
+  tag:                  0.6.2.1
 
 library
   exposed-modules:      Network.JsonRpc
@@ -69,6 +69,7 @@ test-suite test-json-rpc
                         unordered-containers        >= 0.2      && < 0.3,
                         stm                         >= 2.4      && < 2.5,
                         stm-conduit                 >= 2.5      && < 2.7,
+                        transformers                >= 0.3,
                         QuickCheck                  >= 2.6      && < 2.9,
                         test-framework              >= 0.8      && < 0.9,
                         test-framework-quickcheck2  >= 0.3      && < 0.4

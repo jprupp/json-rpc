@@ -122,6 +122,7 @@ parseVerIdMethParams o = do
     m <- o .: "method"
     p <- o .:? "params" .!= Null
     return (v, i, m, p)
+
 class ToRequest q where
     -- | Method associated with request data to build a request object.
     requestMethod :: q -> Method

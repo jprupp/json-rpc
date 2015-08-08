@@ -157,7 +157,7 @@ processIncoming = do
                                         ]
                                     processIncoming
                             Notif{} -> return $ do
-                                $(logError) $ "rejected incoming notification"
+                                $(logError) $ "ignored incoming notification"
                                 processIncoming
             Just (Right (MsgResponse res)) -> do
                 let hasId = case res of
