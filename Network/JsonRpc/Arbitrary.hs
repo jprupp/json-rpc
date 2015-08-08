@@ -1,6 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
--- | Arbitrary instances and data types for use in test suites.
 module Network.JsonRpc.Arbitrary where
 
 import Control.Applicative
