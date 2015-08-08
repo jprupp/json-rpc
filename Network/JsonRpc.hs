@@ -8,6 +8,7 @@ module Network.JsonRpc
 
 import Network.JsonRpc.Interface
 import Network.JsonRpc.Data
+import Network.JsonRpc.Arbitrary()
 
 -- $introduction
 --

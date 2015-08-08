@@ -7,7 +7,7 @@ import Data.Aeson.Types
 import qualified Data.HashMap.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import Network.JsonRpc
+import Network.JsonRpc.Data
 import Test.QuickCheck.Arbitrary
 import Test.QuickCheck.Gen
 
@@ -47,12 +47,14 @@ instance Arbitrary Id where
     arbitrary = oneof [IdInt <$> arbitrary, IdTxt <$> arbitrary]
 
 instance Arbitrary Value where
-    arbitrary = resize 10 $ oneof [val, lsn, objn] where
-        val = oneof [ toJSON <$> (arbitrary :: Gen String)
-                    , toJSON <$> (arbitrary :: Gen Int)
-                    , toJSON <$> (arbitrary :: Gen Double)
-                    , toJSON <$> (arbitrary :: Gen Bool)
-                    ]
+    arbitrary = resize 10 $ oneof [nonull, lsn, objn] where
+        nonull = oneof
+            [ toJSON <$> (arbitrary :: Gen String)
+            , toJSON <$> (arbitrary :: Gen Int)
+            , toJSON <$> (arbitrary :: Gen Double)
+            , toJSON <$> (arbitrary :: Gen Bool)
+            ]
+        val = oneof [ nonull, return Null ]
         ls   = toJSON <$> listOf val
         obj  = toJSON . M.fromList <$> listOf ps
         ps   = (,) <$> (arbitrary :: Gen String) <*> oneof [val, ls]

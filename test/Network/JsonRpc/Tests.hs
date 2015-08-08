@@ -17,7 +17,6 @@ import Data.Aeson
 import Data.Aeson.Types
 import Data.Maybe
 import Network.JsonRpc
-import Network.JsonRpc.Arbitrary()
 import Test.QuickCheck
 import Test.QuickCheck.Monadic
 import Test.Framework
