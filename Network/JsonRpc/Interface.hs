@@ -13,8 +13,11 @@ module Network.JsonRpc.Interface
 
   -- * Communicate with remote party
 , receiveRequest
+, receiveBatchRequest
 , sendResponse
+, sendBatchResponse
 , sendRequest
+, sendBatchRequest
 
   -- * Transports
   -- ** Client
@@ -49,22 +52,25 @@ import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as M
 import Data.Conduit
 import qualified Data.Conduit.List as CL
+import Data.Maybe
 import Data.Conduit.Network
 import Data.Conduit.TMChan
-import qualified Data.Text as T
+import qualified Data.Foldable as F
+import qualified Data.Vector as V
 import Network.JsonRpc.Data
 
 type SentRequests = HashMap Id (TMVar (Maybe Response))
 
-data Session = Session { inCh     :: TBMChan (Either Response Message)
+data Session = Session { inCh     :: TBMChan (Either Response Value)
                        , outCh    :: TBMChan Message
-                       , reqCh    :: Maybe (TBMChan Request)
+                       , reqCh    :: Maybe (TBMChan BatchRequest)
                        , lastId   :: TVar Id
                        , sentReqs :: TVar SentRequests
                        , rpcVer   :: Ver
+                       , dead     :: TVar Bool
                        }
 
--- Context for JSON-RPC connection. Connection will remain active as long
+-- Context for JSON-RPC connection.  Connection will remain active as long
 -- as context is maintaned.
 type JsonRpcT = ReaderT Session
 
@@ -76,24 +82,16 @@ initSession v ignore =
             <*> newTVar (IdInt 0)
             <*> newTVar M.empty
             <*> return v
+            <*> newTVar False
 
-encodeConduit :: MonadLogger m => Conduit Message m ByteString
-encodeConduit = CL.mapM $ \m -> do
-    $(logDebug) $ T.pack $ unwords $ case m of
-        MsgRequest Request{getReqId = i} ->
-            [ "encoding request id:", fromId i ]
-        MsgRequest Notif{} ->
-            [ "encoding notification" ]
-        MsgResponse Response{getResId = i} ->
-            [ "encoding response id:", fromId i ]
-        MsgResponse ResponseError{getResId = i} ->
-            [ "encoding error id:", fromId i ]
-        MsgResponse OrphanError{} ->
-            [ "encoding error without id" ]
-    return . L8.toStrict $ encode m
+-- Conduit to encode JSON to ByteString.
+encodeConduit :: (ToJSON j, MonadLogger m) => Conduit j m ByteString
+encodeConduit = CL.mapM $ \m -> return . L8.toStrict $ encode m
 
+-- | Conduit to decode incoming messages.  Left Response indicates
+-- a response to send back to sender if parsing JSON fails.
 decodeConduit :: MonadLogger m
-              => Ver -> Conduit ByteString m (Either Response Message)
+              => Ver -> Conduit ByteString m (Either Response Value)
 decodeConduit ver = evalStateT loop Nothing where
     loop = lift await >>= maybe flush process
     flush = get >>= maybe (return ()) (handle True . ($ B8.empty))
@@ -108,139 +106,178 @@ decodeConduit ver = evalStateT loop Nothing where
         loop
     handle _ (Partial k) = put (Just k) >> loop
     handle _ (Done rest v) = do
-        let msg = decod v
-        when (isLeft msg) $ $(logError) "received invalid message"
-        lift $ yield msg
+        lift $ yield $ Right v
         if B8.null rest then loop else process rest
 
-    decod v = case parseMaybe parseJSON v of
-        Just msg -> Right msg
-        Nothing -> Left $ OrphanError ver (errorInvalid v)
-
+-- | Process incoming messages. Do not use this directly unless you know
+-- what you are doing. This is an internal function.
 processIncoming :: (Functor m, MonadLoggerIO m) => JsonRpcT m ()
-processIncoming = do
-    i  <- reader inCh
-    o  <- reader outCh
-    qM <- reader reqCh
-    s  <- reader sentReqs
-    join . liftIO . atomically $ readTBMChan i >>= \inc ->
-        case inc of
-            Nothing -> do
-                m <- readTVar s
-                mapM_ ((`putTMVar` Nothing) . snd) $ M.toList m
-                return $ do
-                    $(logDebug) "closed incoming channel"
-                    unless (M.null m) $
-                        $(logError) "some requests did not get responses"
-                    return ()
-            Just (Left e) -> do
-                writeTBMChan o (MsgResponse e)
-                return $ do
-                    $(logError) "replied to sender with error"
-                    processIncoming
-            Just (Right (MsgRequest req)) ->
-                case qM of
-                    Just q -> do
-                        writeTBMChan q req
-                        return $ do
-                            $(logDebug) "received request"
-                            processIncoming
-                    Nothing ->
-                        case req of
-                            Request v m _ d -> do
-                                let e = ResponseError v (errorMethod m) d
-                                writeTBMChan o (MsgResponse e)
-                                return $ do
-                                    $(logError) $ T.pack $ unwords
-                                        [ "rejected incoming request id:"
-                                        , fromId d
-                                        ]
-                                    processIncoming
-                            Notif{} -> return $ do
-                                $(logError) $ "ignored incoming notification"
-                                processIncoming
-            Just (Right (MsgResponse res)) -> do
-                let hasId = case res of
-                                Response{}      -> True
-                                ResponseError{} -> True
-                                OrphanError{}   -> False
-                if hasId
-                    then do
-                        let x = getResId res
-                        m <- readTVar s
-                        let pM = x `M.lookup` m
-                        case pM of
-                            Nothing -> do
-                                let v = getResVer res
-                                    e = errorId x
-                                    err = OrphanError v e
-                                writeTBMChan o $ MsgResponse err
-                                return $ do
-                                    $(logError) $ T.pack $ unwords
-                                        [ "got response with unknown id:"
-                                        , fromId x
-                                        ]
-                                    processIncoming
-                            Just p -> do
-                                writeTVar s $ M.delete x m
-                                putTMVar p $ Just res
-                                return $ do
-                                    $(logDebug) $ T.pack $ unwords
-                                        [ "received response id:"
-                                        , fromId x
-                                        ]
-                                    processIncoming
-                    else return $ do
-                        $(logError) $ T.pack $ unwords
-                            [ "ignoring orhpan error:"
-                            , fromError (getError res)
-                            ]
+processIncoming = ask >>= \qs -> join . liftIO . atomically $ do
+    vEM <- readTBMChan $ inCh qs
+    case vEM of
+        Nothing -> flush qs
+        Just vE ->
+            case vE of
+                Right v@Object{} -> do
+                    single qs v
+                    return $ do
+                        $(logDebug) "received message"
                         processIncoming
+                Right v@(Array a) -> do
+                    if V.null a
+                        then do
+                            let e = OrphanError (rpcVer qs) (errorInvalid v)
+                            writeTBMChan (outCh qs) $ MsgResponse e
+                        else batch qs (V.toList a)
+                    return $ do
+                        $(logDebug) "received batch"
+                        processIncoming
+                Right v -> do
+                    let e = OrphanError (rpcVer qs) (errorInvalid v)
+                    writeTBMChan (outCh qs) $ MsgResponse e
+                    return $ do
+                        $(logWarn) "got invalid message"
+                        processIncoming
+                Left e -> do
+                    writeTBMChan (outCh qs) $ MsgResponse e
+                    return $ do
+                        $(logWarn) "error parsing JSON"
+                        processIncoming
+  where
+    flush qs = do
+        m <- readTVar $ sentReqs qs
+        F.forM_ (reqCh qs) closeTBMChan
+        closeTBMChan $ outCh qs
+        writeTVar (dead qs) True
+        mapM_ ((`putTMVar` Nothing) . snd) $ M.toList m
+        return $ do
+            $(logDebug) "session is now dead"
+            unless (M.null m) $ $(logError) "requests remained unfulfilled"
+    batch qs vs = do
+        ts <- catMaybes <$> forM vs (process qs)
+        unless (null ts) $
+            if any isRight ts
+                then do
+                    let ch = fromJust $ reqCh qs
+                    writeTBMChan ch $ BatchRequest $ rights ts
+                else writeTBMChan (outCh qs) $ MsgBatch $ lefts ts
+    single qs v = do
+        tM <- process qs v
+        case tM of
+            Nothing -> return ()
+            Just (Right t) -> do
+                let ch = fromJust $ reqCh qs
+                writeTBMChan ch $ SingleRequest t
+            Just (Left e) -> writeTBMChan (outCh qs) e
+    process qs v = do
+        let qM = parseMaybe parseJSON v
+        case qM of
+            Just q -> request qs q
+            Nothing -> do
+                let rM = parseMaybe parseJSON v
+                case rM of
+                    Just r -> response qs r >> return Nothing
+                    Nothing -> do
+                        let e = OrphanError (rpcVer qs) (errorInvalid v)
+                            m = MsgResponse e
+                        return $ Just $ Left m
+    request qs t =
+        case reqCh qs of
+            Just _ -> return $ Just $ Right t
+            Nothing ->
+                case t of
+                    Notif{} -> return Nothing
+                    Request{} -> do
+                        let e = errorMethod (getReqMethod t)
+                            v = getReqVer t
+                            i = getReqId t
+                            m = MsgResponse $ ResponseError v e i
+                        return $ Just $ Left m
+    response qs r = do
+        let hasid = case r of
+                        Response{}      -> True
+                        ResponseError{} -> True
+                        OrphanError{}   -> False -- Ignore orphan errors
+        when hasid $ do
+            let x = getResId r
+            m <- readTVar (sentReqs qs)
+            case x `M.lookup` m of
+                Nothing -> return () -- Ignore orphan responses
+                Just p -> do
+                    writeTVar (sentReqs qs) $ M.delete x m
+                    putTMVar p $ Just r
 
 -- | Returns Nothing if did not receive response, could not parse it, or
--- request was a notification. Just Left contains the error object returned
+-- request is a notification. Just Left contains the error object returned
 -- by server if any. Just Right means response was received just right.
-sendRequest :: (MonadLoggerIO m, ToJSON q, ToRequest q, FromResponse r)
+sendRequest :: (MonadLoggerIO m , ToJSON q, ToRequest q, FromResponse r)
             => q -> JsonRpcT m (Maybe (Either ErrorObj r))
-sendRequest q = do
+sendRequest q = head `liftM` sendBatchRequest [q]
+
+-- | Send multiple requests in a batch. If only a single request, do not
+-- put it in a batch.
+sendBatchRequest :: (MonadLoggerIO m, ToJSON q, ToRequest q, FromResponse r)
+                 => [q] -> JsonRpcT m [Maybe (Either ErrorObj r)]
+sendBatchRequest qs = do
     v <- reader rpcVer
     l <- reader lastId
     s <- reader sentReqs
     o <- reader outCh
-    if requestIsNotif q
-        then do
-            $(logDebug) "sending notification"
-            liftIO . atomically $ do
-                let req = buildRequest v q undefined
-                writeTBMChan o $ MsgRequest req
-            $(logDebug) "notification sent"
-            return Nothing
-        else do
-            $(logDebug) "sending request"
-            p <- liftIO . atomically $ do
-                p <- newEmptyTMVar 
-                i <- succ <$> readTVar l
-                m <- readTVar s
-                let req = buildRequest v q i
-                writeTVar s $ M.insert i p m
-                writeTBMChan o $ MsgRequest req 
-                writeTVar l i
-                return p
-            $(logDebug) "request sent, awaiting for response"
-            liftIO . atomically $ takeTMVar p >>= \rM -> case rM of
-                Nothing -> return Nothing
-                Just y@Response{} ->
-                    case fromResponse (requestMethod q) y of
-                        Nothing -> return Nothing
-                        Just x -> return . Just $ Right x
-                Just e@ResponseError{} ->
-                    return . Just $ Left $ getError e
-                _ -> undefined
+    k <- reader dead
+    aps <- liftIO . atomically $ do
+        d <- readTVar k
+        aps <- forM qs $ \q ->
+            if requestIsNotif q
+                then return (buildRequest v q undefined, Nothing)
+                else do
+                    p <- newEmptyTMVar 
+                    i <- succ <$> readTVar l
+                    m <- readTVar s
+                    unless d $ writeTVar s $ M.insert i p m
+                    unless d $ writeTVar l i
+                    if d
+                        then return (buildRequest v q i, Nothing)
+                        else return (buildRequest v q i, Just p)
+        case map fst aps of
+            []  -> return ()
+            [a] -> unless d $ writeTBMChan o $ MsgRequest a
+            as  -> unless d $ writeTBMChan o $ MsgBatch $ map MsgRequest as
+        return aps
+    if null aps
+        then $(logDebug) "no responses pending"
+        else $(logDebug) "listening for responses if pending"
+    liftIO . atomically $ forM aps $ \(a, pM) ->
+        case pM of
+            Nothing -> return Nothing
+            Just  p -> do
+                rM <- takeTMVar p
+                case rM of
+                    Nothing -> return Nothing
+                    Just r@Response{} ->
+                        case fromResponse (getReqMethod a) r of
+                            Nothing -> return Nothing
+                            Just  x -> return $ Just $ Right x
+                    Just e -> return $ Just $ Left $ getError e
 
 -- | Receive requests from remote endpoint. Returns Nothing if incoming
--- channel is closed or has never been opened.
+-- channel is closed or has never been opened. Will reject incoming request
+-- if sent in a batch.
 receiveRequest :: MonadLoggerIO m => JsonRpcT m (Maybe Request)
 receiveRequest = do
+    bt <- receiveBatchRequest
+    case bt of
+        Nothing -> return Nothing
+        Just (SingleRequest q) -> return $ Just q
+        Just BatchRequest{} -> do
+            v <- reader rpcVer
+            let e = errorInvalid $ String "not accepting batches"
+                m = OrphanError v e
+            sendResponse m
+            return Nothing
+
+-- | Receive batch of requests. Will also accept single requests.
+receiveBatchRequest :: MonadLoggerIO m => JsonRpcT m (Maybe BatchRequest)
+receiveBatchRequest = do
     chM <- reader reqCh
     case chM of
         Just ch -> do
@@ -250,30 +287,42 @@ receiveRequest = do
             $(logError) "ignoring requests from remote endpoint"
             return Nothing
 
+-- | Send response message. Do not use to respond to a batch of requests.
 sendResponse :: MonadLoggerIO m => Response -> JsonRpcT m ()
 sendResponse r = do
     o <- reader outCh
     liftIO . atomically . writeTBMChan o $ MsgResponse r
 
+-- | Send batch of responses. Use to respond to a batch of requests.
+sendBatchResponse :: MonadLoggerIO m => BatchResponse -> JsonRpcT m ()
+sendBatchResponse (BatchResponse rs) = do
+    o <- reader outCh
+    liftIO . atomically . writeTBMChan o $ MsgBatch $ map MsgResponse rs
+sendBatchResponse (SingleResponse r) = do
+    o <- reader outCh
+    liftIO . atomically . writeTBMChan o $ MsgResponse r
+
+-- | Send any message. Do not use this. Use the other high-level functions
+-- instead. Will not track request ids. Incoming responses to requests sent
+-- using this method will be ignored.
 sendMessage :: MonadLoggerIO m => Message -> JsonRpcT m ()
 sendMessage msg = reader outCh >>= liftIO . atomically . (`writeTBMChan` msg)
 
--- | Create JSON-RPC session around conduits from transport
--- layer. When context exits session disappears.
+-- | Create JSON-RPC session around conduits from transport layer.  When
+-- context exits session disappears.
 runJsonRpcT :: (MonadLoggerIO m, MonadBaseControl IO m)
-            => Ver               -- ^ JSON-RPC version
-            -> Bool              -- ^ Ignore incoming requests or notifications
-            -> Sink Message m () -- ^ Sink to send messages
-            -> Source m (Either Response Message)
-            -- ^ Incoming messages or error responses to be returned to sender
-            -> JsonRpcT m a      -- ^ JSON-RPC action
-            -> m a               -- ^ Output of action
+            => Ver                  -- ^ JSON-RPC version
+            -> Bool                 -- ^ Ignore incoming requests/notifs
+            -> Sink ByteString m () -- ^ Sink to send messages
+            -> Source m ByteString  -- ^ Source to receive messages from
+            -> JsonRpcT m a         -- ^ JSON-RPC action
+            -> m a                  -- ^ Output of action
 runJsonRpcT ver ignore snk src f = do
     qs <- liftIO . atomically $ initSession ver ignore
     let inSnk  = sinkTBMChan (inCh qs) True
         outSrc = sourceTBMChan (outCh qs)
-    withAsync (src $$ inSnk) $ const $
-        withAsync (outSrc $$ snk) $ \o ->
+    withAsync (src $$ decodeConduit ver $= inSnk) $ const $
+        withAsync (outSrc =$ encodeConduit $$ snk) $ \o ->
             withAsync (runReaderT processIncoming qs) $ const $ do
                 a <- runReaderT f qs
                 liftIO $ do
@@ -298,9 +347,7 @@ jsonRpcTcpClient
     -> JsonRpcT m a   -- ^ JSON-RPC action
     -> m a            -- ^ Output of action
 jsonRpcTcpClient ver ignore cs f = runGeneralTCPClient cs $ \ad ->
-    runJsonRpcT ver ignore
-        (encodeConduit =$ cr =$ appSink ad)
-        (appSource ad $= decodeConduit ver) f
+    runJsonRpcT ver ignore (cr =$ appSink ad) (appSource ad) f
 
 -- | TCP server transport for JSON-RPC.
 jsonRpcTcpServer
@@ -311,6 +358,4 @@ jsonRpcTcpServer
     -> JsonRpcT m ()   -- ^ Action to perform on connecting client thread
     -> m a
 jsonRpcTcpServer ver ignore ss f = runGeneralTCPServer ss $ \cl ->
-    runJsonRpcT ver ignore
-        (encodeConduit =$ cr =$ appSink cl)
-        (appSource cl $= decodeConduit ver) f
+    runJsonRpcT ver ignore (cr =$ appSink cl) (appSource cl) f

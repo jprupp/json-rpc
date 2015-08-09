@@ -4,6 +4,7 @@
 module Network.JsonRpc.Data
 ( -- * Requests
   Request(..)
+, BatchRequest(..)
   -- ** Parsing
 , FromRequest(..)
 , fromRequest
@@ -13,6 +14,7 @@ module Network.JsonRpc.Data
 
   -- * Responses
 , Response(..)
+, BatchResponse(..)
   -- ** Parsing
 , FromResponse(..)
 , fromResponse
@@ -66,7 +68,7 @@ data Request = Request { getReqVer      :: !Ver
                        , getReqMethod   :: !Method
                        , getReqParams   :: !Value
                        }
-             deriving (Eq, Show)
+             deriving (Eq, Show, Generic)
 
 instance NFData Request where
     rnf (Request v m p i) = rnf v `seq` rnf m `seq` rnf p `seq` rnf i
@@ -118,7 +120,7 @@ instance FromJSON Request where
 parseVerIdMethParams :: Object -> Parser (Ver, Maybe Id, Method, Value)
 parseVerIdMethParams o = do
     v <- parseVer o
-    i <- parseId o
+    i <- o .:? "id"
     m <- o .: "method"
     p <- o .:? "params" .!= Null
     return (v, i, m, p)
@@ -162,7 +164,7 @@ data Response = Response      { getResVer :: !Ver
               | OrphanError   { getResVer :: !Ver
                               , getError  :: !ErrorObj
                               }
-              deriving (Eq, Show)
+              deriving (Eq, Show, Generic)
              
 
 instance NFData Response where
@@ -189,6 +191,7 @@ class FromResponse r where
     -- Method corresponds to request to which this response answers.
     parseResult :: Method -> Maybe (Value -> Parser r)
 
+-- | Parse a response knowing the method of the corresponding request.
 fromResponse :: FromResponse r => Method -> Response -> Maybe r
 fromResponse m (Response _ r _) = parseResult m >>= flip parseMaybe r
 fromResponse _ _ = Nothing
@@ -215,11 +218,12 @@ parseVerIdResultError :: Object
                       -> Parser (Ver, Maybe Id, Either ErrorObj Value)
 parseVerIdResultError o = do
     v <- parseVer o
-    i <- parseId o
+    i <- o .:? "id"
     r <- o .:? "result" .!= Null
     p <- if r == Null then Left <$> o .: "error" else return $ Right r
     return (v, i, p)
 
+-- | Create a response from a request. Use in servers.
 buildResponse :: (Monad m, FromRequest q, ToJSON r)
               => Respond q m r
               -> Request
@@ -234,15 +238,17 @@ buildResponse f req@(Request v _ _ i) =
                 Right r -> return . Just $ Response v (toJSON r) i
 buildResponse _ _ = return Nothing
 
+-- | Type of function to make it easy to create a response from a request.
+-- Meant to be used in servers.
 type Respond q m r = q -> m (Either ErrorObj r)
 
--- Error object from JSON-RPC 2.0. ErrorVal for backwards compatibility.
+-- | Error object from JSON-RPC 2.0. ErrorVal for backwards compatibility.
 data ErrorObj = ErrorObj  { getErrMsg  :: !String
                           , getErrCode :: !Int
                           , getErrData :: !Value
                           }
               | ErrorVal  { getErrData :: !Value }
-              deriving (Show, Eq)
+              deriving (Show, Eq, Generic)
 
 instance NFData ErrorObj where
     rnf (ErrorObj m c d) = rnf m `seq` rnf c `seq` rnf d
@@ -264,6 +270,7 @@ instance ToJSON ErrorObj where
         ++ if d == Null then [] else ["data" .= d]
     toJSON (ErrorVal v) = v
 
+-- | Get a user-friendly string with the error information.
 fromError :: ErrorObj -> String
 fromError (ErrorObj m c v) = show c ++ ": " ++ m ++ ": " ++ valueAsString v
 fromError (ErrorVal (String t)) = T.unpack t
@@ -297,22 +304,62 @@ errorId = ErrorObj "Id not recognized" (-32000) . toJSON
 -- Messages
 --
 
+data BatchRequest
+    = BatchRequest     { getBatchRequest  :: ![Request] }
+    | SingleRequest    { getSingleRequest ::  !Request  }
+    deriving (Eq, Show, Generic)
+
+instance NFData BatchRequest where
+    rnf (BatchRequest qs) = rnf qs
+    rnf (SingleRequest q) = rnf q
+
+instance FromJSON BatchRequest where
+    parseJSON qs@Array{} = BatchRequest  <$> parseJSON qs
+    parseJSON q@Object{} = SingleRequest <$> parseJSON q
+    parseJSON _ = mzero
+
+instance ToJSON BatchRequest where
+    toJSON (BatchRequest qs) = toJSON qs
+    toJSON (SingleRequest q) = toJSON q
+
+data BatchResponse
+    = BatchResponse    { getBatchResponse :: ![Response] }
+    | SingleResponse   { getSingleResponse :: !Response  }
+    deriving (Eq, Show, Generic)
+
+instance NFData BatchResponse where
+    rnf (BatchResponse qs) = rnf qs
+    rnf (SingleResponse q) = rnf q
+
+instance FromJSON BatchResponse where
+    parseJSON qs@Array{} = BatchResponse  <$> parseJSON qs
+    parseJSON q@Object{} = SingleResponse <$> parseJSON q
+    parseJSON _ = mzero
+
+instance ToJSON BatchResponse where
+    toJSON (BatchResponse qs) = toJSON qs
+    toJSON (SingleResponse q) = toJSON q
+
 data Message
-    = MsgRequest   { getMsgRequest  :: !Request  }
-    | MsgResponse  { getMsgResponse :: !Response }
-    deriving (Eq, Show)
+    = MsgRequest  { getMsgRequest  :: !Request   }
+    | MsgResponse { getMsgResponse :: !Response  }
+    | MsgBatch    { getBatch       :: ![Message] }
+    deriving (Eq, Show, Generic)
 
 instance NFData Message where
     rnf (MsgRequest  q) = rnf q
     rnf (MsgResponse r) = rnf r
+    rnf (MsgBatch    b) = rnf b
 
 instance ToJSON Message where
     toJSON (MsgRequest  q) = toJSON q
     toJSON (MsgResponse r) = toJSON r
+    toJSON (MsgBatch    b) = toJSON b
 
 instance FromJSON Message where
-    parseJSON v = (MsgRequest  <$> parseJSON v)
-              <|> (MsgResponse <$> parseJSON v)
+    parseJSON v = (MsgRequest   <$> parseJSON v)
+              <|> (MsgResponse  <$> parseJSON v)
+              <|> (MsgBatch     <$> parseJSON v)
 
 --
 -- Types
@@ -344,15 +391,12 @@ instance ToJSON Id where
     toJSON (IdTxt s) = toJSON s
     toJSON (IdInt n) = toJSON n
 
-parseId :: Object -> Parser (Maybe Id)
-parseId o = do
-    d <- o .:? "id" .!= Null
-    if d == Null then return Nothing else parseJSON d
-
+-- | Pretty display a message id. Meant for logs.
 fromId :: Id -> String
 fromId (IdInt i) = show i
 fromId (IdTxt t) = T.unpack t
 
+-- | JSON-RPC version.
 data Ver = V1 -- ^ JSON-RPC 1.0
          | V2 -- ^ JSON-RPC 2.0
          deriving (Eq, Show, Read, Generic)

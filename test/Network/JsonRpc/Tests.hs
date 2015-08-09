@@ -4,6 +4,7 @@
 module Network.JsonRpc.Tests (tests) where
 
 import Control.Applicative
+import Control.Arrow
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.STM
 import Control.Monad
@@ -32,37 +33,43 @@ import Test.Framework.Providers.QuickCheck2
 
 tests :: [Test]
 tests =
-    [ testGroup "JSON-RPC Requests"
-        [ testProperty "Check fields"
+    [ testGroup "Messages"
+        [ testProperty "Check request fields"
             (reqFields :: Request -> Bool)
-        , testProperty "Encode/decode"
+        , testProperty "Encode/decode request"
             (testEncodeDecode :: Request -> Bool)
-        ]
-    , testGroup "JSON-RPC Responses"
-        [ testProperty "Check fields"
+        , testProperty "Check response fields"
             (resFields :: Response -> Bool)
-        , testProperty "Encode/decode"
+        , testProperty "Encode/decode response"
             (testEncodeDecode :: Response -> Bool)
+        , testProperty "Encode/decode message"
+            (testEncodeDecode :: Message -> Bool)
         ]
     , testGroup "Conduits"
         [ testProperty "Encoding" testEncodeConduit
         , testProperty "Decoding" testDecodeConduit
         , testProperty "Decode Garbage" testDecodeGarbageConduit
-        , testProperty "Decode Invalid" testDecodeInvalidConduit
         ]
-    , testGroup "JSON-RPC monad"
+    , testGroup "Functions"
         [ testProperty "Processing incoming messages" testProcessIncoming
         , testProperty "Processing incoming responses" testIncomingResponse
         , testProperty "Receiving incoming requests" testReceiveRequest
+        , testProperty "Receiving incoming batch requests"
+            testReceiveBatchRequest
         , testProperty "Sending responses" testSendResponse
+        , testProperty "Sending batch responses" testSendBatchResponse
+        , testProperty "Sending request batch" testSendBatchRequest
         ]
     , testGroup "Network"
-        [ testProperty "Test server" serverTest
-        , testProperty "Test client" clientTest
-        , testProperty "Test notifications" notifTest
-        , testProperty "Test send request" testSendRequest
+        [ testProperty "Client/server talk" clientTest
+        , testProperty "Notifications" notifTest
         ]
     ]
+
+data ReqList = ReqList { getReqList :: [Req] } deriving (Show, Eq)
+
+instance Arbitrary ReqList where
+    arbitrary = resize 3 $ ReqList <$> arbitrary
 
 data Req = Req { getReq :: Request } deriving (Show, Eq)
 
@@ -87,7 +94,7 @@ instance ToRequest ReqNot where
     requestIsNotif ReqNotReq{} = False
     requestIsNotif ReqNotNot{} = True
 
-data Struct = Struct { getValue :: Value } deriving (Show, Eq)
+data Struct = Struct Value deriving (Show, Eq)
 
 instance Arbitrary Struct where
     arbitrary = resize 10 $ Struct <$> oneof [lsn, objn] where
@@ -105,6 +112,15 @@ instance Arbitrary Struct where
         objn = toJSON . M.fromList <$> listOf psn
         psn  = (,) <$> (arbitrary :: Gen String) <*> oneof [val, ls, obj]
 
+reqFields :: Request -> Bool
+reqFields rq = testFields (checkFieldsReq rq) rq
+
+resFields :: Response -> Bool
+resFields rs = testFields (checkFieldsRes rs) rs
+
+fromRight :: Either a b -> b
+fromRight (Right x) = x
+fromRight _ = undefined
 
 checkVerId :: Ver -> Maybe Id -> Object -> Parser Bool
 checkVerId ver i o = do
@@ -157,7 +173,7 @@ testDecodeConduit :: ([Message], Ver) -> Property
 testDecodeConduit (msgs, ver) = monadicIO $ do
     rt <- run $ runNoLoggingT $
         CL.sourceList (buffer encoded) =$ decodeConduit ver $$ CL.consume
-    assert $ rt == map Right msgs
+    assert $ rt == map (Right . toJSON) msgs
   where
     encoded = B.concat $ map (L.toStrict . encode) msgs
     buffer bs | B.null bs = []
@@ -169,27 +185,15 @@ testDecodeGarbageConduit (ss, ver) = monadicIO $ do
         CL.sourceList (map B.pack ss) =$ decodeConduit ver $$ CL.consume
     assert $ all isLeft rt
 
-testDecodeInvalidConduit :: ([Struct], Ver) -> Property
-testDecodeInvalidConduit (structs, ver) = monadicIO $ do
-    rt <- run $ runNoLoggingT $
-        CL.sourceList (buffer encoded) =$ decodeConduit ver $$ CL.consume
-    assert $ all invalid rt
-  where
-    encoded = B.concat $ map (L.toStrict . encode) msgs
-    buffer bs | B.null bs = []
-              | otherwise = B.take 16 bs : buffer (B.drop 16 bs)
-    msgs = map getValue structs
-    invalid (Left OrphanError{getError = ErrorObj{getErrCode = (-32600)}}) =
-        True
-    invalid _ = False
-
-testProcessIncoming :: ([Either Response Message], Ver, Bool) -> Property
+testProcessIncoming :: ([Either Response Message], Ver, Bool)
+                    -> Property
 testProcessIncoming (msgs, ver, ignore) = monadicIO $ do
     rt <- run $ runNoLoggingT $ do
         expect <- liftIO . atomically $ newTMChan
         qs <- liftIO . atomically $ initSession ver ignore
-        withAsync (cli qs expect msgs) $ const $
+        withAsync (cli qs expect msgs) $ \c -> do
             runReaderT processIncoming qs
+            wait c
         validate expect True
     assert rt
   where
@@ -202,56 +206,81 @@ testProcessIncoming (msgs, ver, ignore) = monadicIO $ do
         closeTMChan expect
         closeTBMChan $ inCh qs
     cli qs expect (x:xs) = do
-        liftIO . atomically $ writeTBMChan (inCh qs) x
+        liftIO . atomically $ writeTBMChan (inCh qs) (toJSON <$> x)
         liftIO . atomically $ case x of
-            Left e -> do
-                m <- readTBMChan $ outCh qs
-                case m of
-                    Just (MsgResponse err) ->
-                        if err == e
-                            then writeTMChan expect True
-                            else writeTMChan expect False
-                    _ -> writeTMChan expect False
+            Left e ->
+                caseLeftResponse qs e >>= writeTMChan expect
             Right (MsgRequest req@Request{}) ->
+                caseSingleRequest req qs >>= writeTMChan expect
+            Right (MsgRequest nt@Notif{}) ->
+                caseSingleNotif nt qs >>= writeTMChan expect
+            Right MsgResponse{} ->
+                writeTMChan expect True
+            Right (MsgBatch []) ->
+                caseEmptyBatch qs >>= writeTMChan expect
+            Right (MsgBatch ms) ->
+                caseBatch qs ms >>= writeTMChan expect
+        cli qs expect xs
+    caseLeftResponse qs e = do
+        m <- readTBMChan $ outCh qs
+        case m of
+            Just (MsgResponse err) -> return $ err == e
+            _ -> return False
+    caseEmptyBatch qs = do
+        m <- readTBMChan $ outCh qs
+        case m of
+            Just (MsgResponse (OrphanError v (ErrorObj _ i _))) ->
+                return $ v == rpcVer qs && i == (-32600)
+            _ -> return False
+    caseBatch qs ms = do
+        let isrq (MsgRequest Request{}) = True
+            isrq _ = False
+            isnotif (MsgRequest Notif{}) = True
+            isnotif _ = False
+        if any isrq ms
+            then
                 if ignore
                     then do
                         m <- readTBMChan $ outCh qs
                         case m of
-                            Just (MsgResponse (ResponseError _ e _)) ->
-                                case e of
-                                    ErrorObj{} ->
-                                        if getErrCode e == (-32601)
-                                            then writeTMChan expect True
-                                            else writeTMChan expect False
-                                    _ -> writeTMChan expect False
-                            _ -> writeTMChan expect False
+                            Just MsgBatch{} -> return True
+                            _ -> return False
                     else do
-                        m <- readTBMChan (fromJust $ reqCh qs)
-                        if m == Just req
-                            then writeTMChan expect True
-                            else writeTMChan expect False
-            Right (MsgRequest nt@Notif{}) ->
-                if ignore
-                    then writeTMChan expect True
-                    else do
-                        m <- readTBMChan (fromJust $ reqCh qs)
-                        if m == Just nt
-                            then writeTMChan expect True
-                            else writeTMChan expect False
-            Right (MsgResponse OrphanError{}) ->
-                writeTMChan expect True
-            Right MsgResponse{} -> do
+                        m <- readTBMChan $ fromJust $ reqCh qs
+                        case m of
+                            Just BatchRequest{} -> return True
+                            _ -> return False
+            else
+                if any isnotif ms
+                    then
+                        if ignore
+                            then return True
+                            else do
+                                m <- readTBMChan $ fromJust $ reqCh qs
+                                case m of
+                                    Just BatchRequest{} -> return True
+                                    _ -> return False
+                    else return True
+    caseSingleRequest req qs =
+        if ignore
+            then do
                 m <- readTBMChan $ outCh qs
                 case m of
-                    Just (MsgResponse (OrphanError _ e@ErrorObj{})) ->
-                        if getErrCode e == (-32000)
-                            then writeTMChan expect True
-                            else writeTMChan expect False
-                    _ -> writeTMChan expect False
-        cli qs expect xs
+                    Just (MsgResponse (ResponseError _ e@ErrorObj{} _)) ->
+                        return $ getErrCode e == (-32601)
+                    _ -> return False
+            else do
+                m <- readTBMChan (fromJust $ reqCh qs)
+                return $ m == Just (SingleRequest req)
+    caseSingleNotif nt qs =
+        if ignore
+            then return True
+            else do
+                m <- readTBMChan (fromJust $ reqCh qs)
+                return $ m == Just (SingleRequest nt)
 
-testIncomingResponse :: ([Req], Ver, Bool) -> Property
-testIncomingResponse (reqss, ver, ignore) = nodup ==> monadicIO $ do
+testIncomingResponse :: ([ReqList], Ver, Bool) -> Property
+testIncomingResponse (reqss', ver, ignore) = nodup ==> monadicIO $ do
     rt <- run $ runNoLoggingT $ do
         expect <- liftIO . atomically $ newTMChan
         qs <- liftIO . atomically $ do
@@ -267,14 +296,20 @@ testIncomingResponse (reqss, ver, ignore) = nodup ==> monadicIO $ do
         return $ valid && mapempty
     assert rt
   where
-    reqs = map getReq reqss
-    nodup = length (nubBy ((==) `on` getReqId) reqs) == length reqs
+    reqss = map getReqList reqss'
+    reqs = let f [q] = SingleRequest (getReq q)
+               f qs  = BatchRequest (map getReq qs)
+           in map f reqss
+    flatreqs = let f (BatchRequest bt) = bt
+                   f (SingleRequest rt) = [rt]
+               in concatMap f reqs
+    nodup = length (nubBy ((==) `on` getReqId) flatreqs) == length flatreqs
     respond (Request v _ p i) = Response v p i
     respond _ = undefined
-    responses = map respond reqs
+    responses = map respond flatreqs
     msgs = map MsgResponse responses
     sent = do
-        promises <- forM reqs $
+        promises <- forM flatreqs $
             \Request{getReqId = i} -> (,) i <$> newEmptyTMVar
         return $ M.fromList promises
     validate _ [] state = return state
@@ -286,69 +321,90 @@ testIncomingResponse (reqss, ver, ignore) = nodup ==> monadicIO $ do
     cli qs expect [] = liftIO . atomically $ do
         closeTMChan expect
         closeTBMChan $ inCh qs
-    cli qs expect (x:xs) = do
-        let i = getResId $ getMsgResponse x
-        p <- liftIO . atomically $ do
+    cli qs expect (x:xs) =
+        case x of
+            MsgResponse res -> do
+                p <- getpromise qs res
+                liftIO . atomically $ writeTBMChan (inCh qs) (Right $ toJSON x)
+                liftIO . atomically $ do
+                    rE <- readTMVar p
+                    F.forM_ rE $ writeTMChan expect
+                cli qs expect xs
+            MsgBatch resps -> do
+                ps <- mapM (getpromise qs . getMsgResponse) resps
+                liftIO . atomically $ writeTBMChan (inCh qs) (Right $ toJSON x)
+                forM_ ps $ \p -> liftIO . atomically $ do
+                    rE <- readTMVar p
+                    F.forM_ rE $ writeTMChan expect
+            _ -> undefined
+    getpromise qs res = do
+        let i = getResId res
+        liftIO . atomically $ do
             snt <- readTVar (sentReqs qs)
             return . fromJust $ M.lookup i snt
-        liftIO . atomically $ writeTBMChan (inCh qs) (Right x)
-        liftIO . atomically $ do
-            rE <- readTMVar p
-            F.forM_ rE $ writeTMChan expect
-        cli qs expect xs
 
-testSendRequest :: ([(ReqNot, Either ErrorObj Value)], Ver, Bool) -> Property
-testSendRequest (reqnotres, ver, ignore) = monadicIO $ do
-    (ex, rs) <- run $ runNoLoggingT $ do
-        expect <- liftIO . atomically $ newTMChan
+testSendBatchRequest :: ([(ReqNot, Either ErrorObj Value)], Ver, Bool)
+                     -> Property
+testSendBatchRequest (reqnotres, ver, ignore) = nonull ==> monadicIO $ do
+    rs <- run $ runNoLoggingT $ do
         qs <- liftIO . atomically $ initSession ver ignore
-        rs <- withAsync (cli qs expect reqnotres) $ \c -> do
-            rs <- runReaderT (mapM (sendRequest . fst) reqnotres) qs
+        withAsync (cli qs) $ \c -> do
+            rs <- runReaderT (sendBatchRequest $ map fst reqnotres) qs
             wait c
             return (rs :: [Maybe (Either ErrorObj Value)])
-        ex <- liftIO . atomically $ getexpect expect []
-        return (ex, rs)
     assert $ length rs == length reqnotres
-    assert $ and $ zipWith matchresult reqnotres rs
-    assert $ and $ zipWith matchnotif (map fst reqnotres) ex
   where
-    matchnotif q r =
-        case q of
-            ReqNotReq v ->
-                case r of
-                    Just (MsgRequest Request{getReqParams = v'}) -> v == v'
-                    _ -> False
-            ReqNotNot v ->
-                case r of
-                    Just (MsgRequest Notif{getReqParams = v'}) -> v == v'
-                    _ -> False
-    matchresult (q, e) r =
-        case q of
-            ReqNotReq{} -> Just e == r
-            _ -> isNothing r
-    getexpect expect acc = do
-        valM <- readTMChan expect
-        case valM of
-            Nothing -> return $ reverse acc
-            Just val -> getexpect expect (val:acc)
+    nonull = not $ null reqnotres
+    resmap = M.fromList $ map (first toJSON) reqnotres
     respond (Request v _ _ i) (Left  y) = Just $ ResponseError v y i
     respond (Request v _ _ i) (Right y) = Just $ Response      v y i
     respond _ _ = undefined
-    cli _ expect [] = liftIO . atomically $ closeTMChan expect
-    cli qs expect ((x,y):xs) = join . liftIO . atomically $ do
+    fulfill req sent = F.forM_ (getReqId req `M.lookup` sent) $ \p ->
+        putTMVar p $ respond req $ fromJust $ getReqParams req `M.lookup` resmap
+    cli qs = liftIO . atomically $ do
         msg <- readTBMChan (outCh qs)
-        writeTMChan expect msg
-        unless (requestIsNotif x) $
-            case msg of
-                Just (MsgRequest req@Request{}) -> do
-                    sent <- readTVar (sentReqs qs)
-                    F.forM_ (getReqId req `M.lookup` sent) $ \p ->
-                        putTMVar p $ respond req y
-                _ -> return ()
-        return $ cli qs expect xs
+        sent <- readTVar (sentReqs qs)
+        case msg of
+            Just (MsgRequest req@Request{}) -> fulfill req sent
+            Just (MsgBatch bt) ->
+                forM_ bt $ \m ->
+                    case m of
+                        MsgRequest req@Request{} -> fulfill req sent
+                        _ -> return ()
+            _ -> return ()
 
-testReceiveRequest :: ([Request], Ver, Bool) -> Property
+testReceiveRequest :: ([BatchRequest], Ver, Bool) -> Property
 testReceiveRequest (reqs, ver, ignore) = monadicIO $ do
+    rt <- run $ runNoLoggingT $ do
+        qs <- liftIO . atomically $ initSession ver ignore
+        withAsync (send qs) $ \c -> do
+            res <- runReaderT receive qs
+            wait c
+            return res
+    assert $ and rt
+  where
+    send qs = F.forM_ (reqCh qs) $ \qch -> do
+        forM_ reqs $ liftIO . atomically . writeTBMChan qch
+        liftIO . atomically $ closeTBMChan qch
+    receive = forM reqs $ \q -> do
+        t <- receiveRequest
+        if ignore
+            then return $ isNothing t
+            else
+                case q of
+                    SingleRequest{} ->
+                        return $ Just q == fmap SingleRequest t
+                    BatchRequest{} -> do
+                        ch <- reader outCh
+                        m <- liftIO . atomically $ readTBMChan ch
+                        case m of
+                            Just (MsgResponse OrphanError{}) -> 
+                                return $ isNothing t
+                            _ -> return $ isNothing t
+
+
+testReceiveBatchRequest :: ([BatchRequest], Ver, Bool) -> Property
+testReceiveBatchRequest (reqs, ver, ignore) = monadicIO $ do
     rt <- run $ runNoLoggingT $ do
         qs <- liftIO . atomically $ initSession ver ignore
         withAsync (send qs) $ \c -> do
@@ -362,7 +418,7 @@ testReceiveRequest (reqs, ver, ignore) = monadicIO $ do
     send qs = F.forM_ (reqCh qs) $ \qch -> do
         forM_ reqs $ liftIO . atomically . writeTBMChan qch
         liftIO . atomically $ closeTBMChan qch
-    receive = forM reqs $ const receiveRequest
+    receive = forM reqs $ const receiveBatchRequest
 
 testSendResponse :: ([Response], Ver, Bool) -> Property
 testSendResponse (responses, ver, ignore) = monadicIO $ do
@@ -378,11 +434,21 @@ testSendResponse (responses, ver, ignore) = monadicIO $ do
     receive qs = forM responses $ const $ liftIO . atomically $
         readTBMChan (outCh qs)
 
-reqFields :: Request -> Bool
-reqFields rq = testFields (checkFieldsReq rq) rq
-
-resFields :: Response -> Bool
-resFields rs = testFields (checkFieldsRes rs) rs
+testSendBatchResponse :: ([BatchResponse], Ver, Bool) -> Property
+testSendBatchResponse (responses, ver, ignore) = monadicIO $ do
+    ex <- run $ runNoLoggingT $ do
+        qs <- liftIO . atomically $ initSession ver ignore
+        withAsync (receive qs) $ \c -> do
+            runReaderT send qs
+            wait c
+    assert $ length ex == length responses
+    assert $ all isJust ex && map fromJust ex == map msg responses
+  where
+    msg (BatchResponse bt) = MsgBatch $ map MsgResponse bt
+    msg (SingleResponse r) = MsgResponse r
+    send = forM_ responses sendBatchResponse
+    receive qs = forM responses $ const $ liftIO . atomically $
+        readTBMChan (outCh qs)
 
 createChans :: MonadIO m
             => m ((TBMChan a, TBMChan b), (Sink a m (), Source m b))
@@ -391,43 +457,13 @@ createChans = do
     let (snk, src) = (sinkTBMChan bso False, sourceTBMChan bsi)
     return ((bso, bsi), (snk, src))
 
-serverTest :: ([Request], Ver) -> Property
-serverTest (reqs, ver) = monadicIO $ do
-    rt <- run $ runNoLoggingT $ do
-        ((bso, bsi), (snk, src)) <- createChans
-        withAsync (server snk src) $ const $
-            withAsync (sender bsi) $ const $ receiver bso []
-    assert $ length rt == length nonotif
-    assert $ null rt || all isJust rt
-    assert $ params == reverse (results rt)
-  where
-    respond q = return $ Right (q :: Value)
-    server snk src = runJsonRpcT ver False
-        (encodeConduit =$ snk) (src =$ decodeConduit ver) (srv respond)
-    sender bsi = forM_ reqs $ liftIO . atomically .
-        writeTBMChan bsi . L.toStrict . encode . MsgRequest
-    receiver bso xs =
-        if length xs == length nonotif
-            then return xs
-            else liftIO (atomically $ readTBMChan bso) >>= \b -> case b of
-                Just x -> do
-                    let res = decodeStrict' x :: Maybe Response
-                    receiver bso (res:xs)
-                Nothing -> undefined
-    params = map getReqParams nonotif
-    results = map $ getResult . fromJust
-    nonotif = flip filter reqs $ \q -> case q of Request{} -> True
-                                                 Notif{}   -> False
-
 clientTest :: ([Value], Ver) -> Property
 clientTest (qs, ver) = monadicIO $ do
     rt <- run $ runNoLoggingT $ do
         ((bso, bsi), (snk, src)) <- createChans
         let csnk = sinkTBMChan bsi False
             csrc = sourceTBMChan bso
-        withAsync (server snk src) $ const $ cli
-            (CL.map Right =$ csnk)
-            (csrc $= CL.map Right)
+        withAsync (server snk src) $ const $ cli csnk csrc
     assert $ length rt == length qs
     assert $ null rt || all correct rt
     assert $ qs == results rt
@@ -447,16 +483,14 @@ notifTest (qs, ver) = monadicIO $ do
             csrc = sourceTBMChan bso
         (sig, notifs) <- liftIO . atomically $
             (,) <$> newEmptyTMVar <*> newTVar []
-        withAsync (server snk src sig notifs) $ const $ cli sig
-            (CL.map Right =$ csnk)
-            (csrc $= CL.map Right)
+        withAsync (server snk src sig notifs) $ const $ cli sig csnk csrc
         liftIO . atomically $ readTVar notifs
     assert $ length nt == length ntfs
     assert $ reverse nt == ntfs
   where
     respond q = return $ Right (q :: Value)
     server snk src sig notifs =
-        runJsonRpcT ver False snk src $ process sig notifs
+        runJsonRpcT ver False snk src (process sig notifs)
     process sig notifs = do
         qM <- receiveRequest
         case qM of
@@ -491,8 +525,3 @@ srv respond = do
             case rM of
                 Nothing -> srv respond
                 Just r -> sendResponse r >> srv respond
-
-
-fromRight :: Either a b -> b
-fromRight (Right x) = x
-fromRight _ = undefined

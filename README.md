@@ -24,10 +24,13 @@ This JSON-RPC server returns the current time.
 ``` haskell
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Logger
 import Data.Aeson.Types hiding (Error)
 import Data.Conduit.Network
+import qualified Data.Foldable as F
+import Data.Maybe
 import Data.Time.Clock
 import Data.Time.Format
 import Network.JsonRpc
@@ -56,21 +59,21 @@ main = runStderrLoggingT $ do
 srv :: MonadLoggerIO m => JsonRpcT m ()
 srv = do
     $(logDebug) "listening for new request"
-    qM <- receiveRequest
+    qM <- receiveBatchRequest
     case qM of
         Nothing -> do
             $(logDebug) "closed request channel, exting"
             return ()
-        Just q -> do
+        Just (SingleRequest q) -> do
             $(logDebug) "got request"
             rM <- buildResponse respond q
-            case rM of
-                Nothing -> do
-                    $(logDebug) "no response for this request"
-                    srv
-                Just r -> do
-                    $(logDebug) "sending response"
-                    sendResponse r >> srv
+            F.forM_ rM sendResponse
+            srv
+        Just (BatchRequest qs) -> do
+            $(logDebug) "got request batch"
+            rs <- catMaybes `liftM` forM qs (buildResponse respond)
+            sendBatchResponse $ BatchResponse rs
+            srv
 ```
 
 Client Example
@@ -112,21 +115,33 @@ instance FromResponse TimeRes where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
     parseResult _ = Nothing
 
-req :: MonadLoggerIO m => JsonRpcT m (Either String UTCTime)
+req :: MonadLoggerIO m => JsonRpcT m UTCTime
 req = do
     $(logDebug) "sending time request"
     ts <- sendRequest TimeReq
-    $(logDebug) "received response"
     case ts of
-        Nothing -> return $ Left "could not parse response"
-        Just (Left e) -> return . Left $ fromError e
-        Just (Right (TimeRes r)) -> return $ Right r
+        Nothing -> error "could not parse response"
+        Just (Left e) -> error $ fromError e
+        Just (Right (TimeRes r)) -> return r
+
+reqBatch :: MonadLoggerIO m => JsonRpcT m [UTCTime]
+reqBatch = do
+    $(logDebug) "sending time requests"
+    ts <- sendBatchRequest $ replicate 4 TimeReq
+    forM ts $ \t ->
+        case t of
+            Nothing -> error "could not parse response"
+            Just (Left e) -> error $ fromError e
+            Just (Right (TimeRes r)) -> return r
+
 
 main :: IO ()
 main = runStderrLoggingT $
     jsonRpcTcpClient V2 True (clientSettings 31337 "::1") $ do
         $(logDebug) "sending four time requests one second apart"
         replicateM_ 4 $ do
-            req >>= liftIO . print
+            req >>= $(logDebug) . T.pack . ("response: "++) . show
             liftIO (threadDelay 1000000)
+        $(logDebug) "sending four time requests in a batch"
+        reqBatch >>= $(logDebug) . T.pack . ("response: "++) . show
 ```

@@ -31,20 +31,32 @@ instance FromResponse TimeRes where
         f t = parseTime defaultTimeLocale "%c" (T.unpack t)
     parseResult _ = Nothing
 
-req :: MonadLoggerIO m => JsonRpcT m (Either String UTCTime)
+req :: MonadLoggerIO m => JsonRpcT m UTCTime
 req = do
     $(logDebug) "sending time request"
     ts <- sendRequest TimeReq
-    $(logDebug) "received response"
     case ts of
-        Nothing -> return $ Left "could not parse response"
-        Just (Left e) -> return . Left $ fromError e
-        Just (Right (TimeRes r)) -> return $ Right r
+        Nothing -> error "could not parse response"
+        Just (Left e) -> error $ fromError e
+        Just (Right (TimeRes r)) -> return r
+
+reqBatch :: MonadLoggerIO m => JsonRpcT m [UTCTime]
+reqBatch = do
+    $(logDebug) "sending time requests"
+    ts <- sendBatchRequest $ replicate 4 TimeReq
+    forM ts $ \t ->
+        case t of
+            Nothing -> error "could not receive or parse response"
+            Just (Left e) -> error $ fromError e
+            Just (Right (TimeRes r)) -> return r
+
 
 main :: IO ()
 main = runStderrLoggingT $
     jsonRpcTcpClient V2 True (clientSettings 31337 "::1") $ do
         $(logDebug) "sending four time requests one second apart"
         replicateM_ 4 $ do
-            req >>= liftIO . print
+            req >>= $(logDebug) . T.pack . ("response: "++) . show
             liftIO (threadDelay 1000000)
+        $(logDebug) "sending four time requests in a batch"
+        reqBatch >>= $(logDebug) . T.pack . ("response: "++) . show

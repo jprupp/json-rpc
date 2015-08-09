@@ -1,9 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Logger
 import Data.Aeson.Types hiding (Error)
 import Data.Conduit.Network
+import qualified Data.Foldable as F
+import Data.Maybe
 import Data.Time.Clock
 import Data.Time.Format
 import Network.JsonRpc
@@ -32,18 +35,18 @@ main = runStderrLoggingT $ do
 srv :: MonadLoggerIO m => JsonRpcT m ()
 srv = do
     $(logDebug) "listening for new request"
-    qM <- receiveRequest
+    qM <- receiveBatchRequest
     case qM of
         Nothing -> do
             $(logDebug) "closed request channel, exting"
             return ()
-        Just q -> do
+        Just (SingleRequest q) -> do
             $(logDebug) "got request"
             rM <- buildResponse respond q
-            case rM of
-                Nothing -> do
-                    $(logDebug) "no response for this request"
-                    srv
-                Just r -> do
-                    $(logDebug) "sending response"
-                    sendResponse r >> srv
+            F.forM_ rM sendResponse
+            srv
+        Just (BatchRequest qs) -> do
+            $(logDebug) "got request batch"
+            rs <- catMaybes `liftM` forM qs (buildResponse respond)
+            sendBatchResponse $ BatchResponse rs
+            srv

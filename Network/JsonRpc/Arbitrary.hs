@@ -37,11 +37,28 @@ instance Arbitrary ErrorObj where
         , ErrorVal <$> arbitrary
         ]
 
+instance Arbitrary BatchRequest where
+    arbitrary = oneof
+        [ BatchRequest <$> arbitrary
+        , SingleRequest <$> arbitrary
+        ]
+
+instance Arbitrary BatchResponse where
+    arbitrary = oneof
+        [ BatchResponse <$> arbitrary
+        , SingleResponse <$> arbitrary
+        ]
+
 instance Arbitrary Message where
     arbitrary = oneof
         [ MsgRequest  <$> arbitrary
         , MsgResponse <$> arbitrary
+        , MsgBatch    <$> batch
         ]
+      where
+        batch = listOf $ oneof [ MsgRequest  <$> arbitrary
+                               , MsgResponse <$> arbitrary
+                               ]
 
 instance Arbitrary Id where
     arbitrary = oneof [IdInt <$> arbitrary, IdTxt <$> arbitrary]
