@@ -1,15 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+import Control.Concurrent
+import Control.Concurrent.Async.Lifted
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Logger
-import Data.Aeson.Types
+import Data.Aeson.Types hiding (Error)
 import Data.Conduit.Network
 import qualified Data.Foldable as F
 import Data.Maybe
-import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Time.Format
+import qualified Data.Text as T
+import qualified Data.Vector as V
 import Network.JsonRpc
 import System.Locale
 
@@ -49,7 +52,7 @@ respond Ping    = return $ Right Pong
 main :: IO ()
 main = runStderrLoggingT $ do
     let ss = serverSettings 31337 "::1"
-    jsonRpcTcpServer V2 False ss srv
+    jsonRpcTcpServer V2 False ss $ withAsync pinger $ const srv
 
 srv :: MonadLoggerIO m => JsonRpcT m ()
 srv = do
@@ -69,3 +72,12 @@ srv = do
             rs <- catMaybes `liftM` forM qs (buildResponse respond)
             sendBatchResponse $ BatchResponse rs
             srv
+
+pinger :: MonadLoggerIO m => JsonRpcT m ()
+pinger = do
+    $(logDebug) "ping client"
+    p <- sendRequest Ping
+    $(logDebug) $ T.pack $
+        "received " ++ show (p :: Maybe (Either ErrorObj Res))
+    liftIO $ threadDelay 1500000
+    pinger
