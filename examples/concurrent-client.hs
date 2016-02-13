@@ -14,7 +14,6 @@ import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Time.Format
 import Network.JsonRpc
-import System.Locale
 
 data Req = TimeReq | Ping deriving (Show, Eq)
 
@@ -35,7 +34,7 @@ data Res = Time { getTime :: UTCTime } | Pong deriving (Show, Eq)
 
 instance FromResponse Res where
     parseResult "time" = Just $ withText "time" $ \t ->
-        case parseTime defaultTimeLocale "%c" $ T.unpack t of
+        case parseTimeM True defaultTimeLocale "%c" $ T.unpack t of
             Just t' -> return $ Time t'
             Nothing -> mzero
     parseResult "ping" = Just $ const $ return Pong
