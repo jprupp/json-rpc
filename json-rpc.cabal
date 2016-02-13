@@ -1,5 +1,5 @@
 name:                   json-rpc
-version:                0.7.0.2
+version:                0.7.1.0
 synopsis:               Fully-featured JSON-RPC 2.0 library
 description:
   This JSON-RPC library is fully-compatible with JSON-RPC 2.0 and 1.0. It
@@ -24,7 +24,7 @@ source-repository head
 source-repository this
   type:                 git
   location:             https://github.com/xenog/json-rpc.git
-  tag:                  0.7.0.2
+  tag:                  0.7.1.0
 
 library
   exposed-modules:      Network.JsonRpc
@@ -32,24 +32,24 @@ library
                         Network.JsonRpc.Interface
                         Network.JsonRpc.Arbitrary
   build-depends:        base                        >= 4.6      && < 5,
-                        aeson                       >= 0.7      && < 0.10,
-                        attoparsec                  >= 0.11,
-                        bytestring                  >= 0.10     && < 0.11,
-                        conduit                     >= 1.2      && < 1.3,
-                        conduit-extra               >= 1.1      && < 1.2,
-                        deepseq                     >= 1.3      && < 1.5,
-                        hashable                    >= 1.1      && < 1.3,
-                        lifted-async                >= 0.7      && < 0.8,
-                        monad-control               >= 0.3      && < 1.1,
-                        monad-logger                >= 0.3      && < 0.4,
-                        mtl                         >= 2.1      && < 2.3,
-                        stm                         >= 2.4      && < 2.5,
-                        stm-conduit                 >= 2.5      && < 2.7,
-                        text                        >= 0.11     && < 1.3,
-                        transformers                >= 0.3,
-                        unordered-containers        >= 0.2      && < 0.3,
-                        vector                      >= 0.10     && < 0.11,
-                        QuickCheck                  >= 2.6      && < 2.9
+                        aeson,
+                        attoparsec,
+                        bytestring,
+                        conduit,
+                        conduit-extra,
+                        deepseq,
+                        hashable,
+                        lifted-async,
+                        monad-control,
+                        monad-logger,
+                        mtl,
+                        stm,
+                        stm-conduit,
+                        text,
+                        transformers,
+                        unordered-containers,
+                        vector,
+                        QuickCheck
   default-language:     Haskell2010
   ghc-options:          -Wall
 
@@ -59,20 +59,20 @@ test-suite test-json-rpc
   main-is:              main.hs
   other-modules:        Network.JsonRpc.Tests
   build-depends:        base                        >= 4.6      && < 5,
-                        aeson                       >= 0.7      && < 0.10,
-                        bytestring                  >= 0.10     && < 0.11,
-                        conduit                     >= 1.2      && < 1.3,
+                        aeson,
+                        bytestring,
+                        conduit,
                         json-rpc,
-                        lifted-async                >= 0.7      && < 0.8,
-                        monad-logger                >= 0.3      && < 0.4,
-                        mtl                         >= 2.1      && < 2.3,
-                        text                        >= 0.11     && < 1.3,
-                        unordered-containers        >= 0.2      && < 0.3,
-                        stm                         >= 2.4      && < 2.5,
-                        stm-conduit                 >= 2.5      && < 2.7,
-                        transformers                >= 0.3,
-                        QuickCheck                  >= 2.6      && < 2.9,
-                        test-framework              >= 0.8      && < 0.9,
-                        test-framework-quickcheck2  >= 0.3      && < 0.4
+                        lifted-async,
+                        monad-logger,
+                        mtl,
+                        text,
+                        unordered-containers,
+                        stm,
+                        stm-conduit,
+                        transformers,
+                        QuickCheck,
+                        test-framework,
+                        test-framework-quickcheck2
   default-language:     Haskell2010
   ghc-options:          -Wall

@@ -93,21 +93,23 @@ encodeConduit = CL.mapM $ \m -> return . L8.toStrict $ encode m
 decodeConduit :: MonadLogger m
               => Ver -> Conduit ByteString m (Either Response Value)
 decodeConduit ver = evalStateT loop Nothing where
-    loop = lift await >>= maybe flush process
+    loop = lift await >>= maybe flush (process False)
     flush = get >>= maybe (return ()) (handle True . ($ B8.empty))
-    process = runParser >=> handle False
-    runParser ck = maybe (parse json' ck) ($ ck) <$> get <* put Nothing
+    process b = runParser >=> handle b
+    runParser ck = maybe (parse json ck) ($ ck) <$> get <* put Nothing
 
     handle True (Fail "" _ _) =
         $(logDebug) "ignoring null string at end of incoming data"
-    handle _ (Fail i _ _) = do
+    handle b (Fail i _ _) = do
         $(logError) "error parsing incoming message"
         lift . yield . Left $ OrphanError ver (errorParse i)
-        loop
+        unless b loop
     handle _ (Partial k) = put (Just k) >> loop
-    handle _ (Done rest v) = do
+    handle b (Done rest v) = do
         lift $ yield $ Right v
-        if B8.null rest then loop else process rest
+        if B8.null rest
+           then unless b loop
+           else process b rest
 
 -- | Process incoming messages. Do not use this directly unless you know
 -- what you are doing. This is an internal function.
