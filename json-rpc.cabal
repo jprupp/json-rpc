@@ -21,11 +21,6 @@ source-repository head
   type:                 git
   location:             https://github.com/xenog/json-rpc.git
 
-source-repository this
-  type:                 git
-  location:             https://github.com/xenog/json-rpc.git
-  tag:                  0.7.1.1
-
 library
   exposed-modules:      Network.JsonRpc
   other-modules:        Network.JsonRpc.Data,
