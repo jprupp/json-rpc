@@ -3,3 +3,4 @@ packages:
 - '.'
 extra-deps: []
 resolver: lts-5.2
+allow-newer: true
