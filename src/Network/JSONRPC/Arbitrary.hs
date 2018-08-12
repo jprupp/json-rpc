@@ -1,15 +1,14 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
-module Network.JsonRpc.Arbitrary where
+module Network.JSONRPC.Arbitrary where
 
-import Control.Applicative
-import Data.Aeson.Types
-import qualified Data.HashMap.Strict as M
-import Data.Text (Text)
-import qualified Data.Text as T
-import Network.JsonRpc.Data
-import Test.QuickCheck.Arbitrary
-import Test.QuickCheck.Gen
+import           Data.Aeson.Types
+import qualified Data.HashMap.Strict       as M
+import           Data.Text                 (Text)
+import qualified Data.Text                 as T
+import           Network.JSONRPC.Data
+import           Test.QuickCheck.Arbitrary
+import           Test.QuickCheck.Gen
 
 instance Arbitrary Text where
     arbitrary = T.pack <$> arbitrary
@@ -61,7 +60,7 @@ instance Arbitrary Message where
                                ]
 
 instance Arbitrary Id where
-    arbitrary = oneof [IdInt <$> arbitrary, IdTxt <$> arbitrary]
+    arbitrary = IdInt <$> arbitraryBoundedRandom
 
 instance Arbitrary Value where
     arbitrary = resize 10 $ oneof [nonull, lsn, objn] where

@@ -1,19 +1,18 @@
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
-import Control.Concurrent.Async.Lifted
-import Control.Concurrent
-import Control.Monad
-import Control.Monad.Trans
-import Control.Monad.Logger
-import Data.Aeson
-import Data.Aeson.Types hiding (Error)
-import Data.Conduit.Network
-import qualified Data.Foldable as F
-import Data.Maybe
-import qualified Data.Text as T
-import Data.Time.Clock
-import Data.Time.Format
-import Network.JsonRpc
+{-# LANGUAGE TemplateHaskell   #-}
+import           Control.Monad
+import           Control.Monad.Logger
+import           Data.Aeson
+import           Data.Aeson.Types     hiding (Error)
+import           Data.Conduit.Network
+import qualified Data.Foldable        as F
+import           Data.Maybe
+import qualified Data.Text            as T
+import           Data.Time.Clock
+import           Data.Time.Format
+import           Network.JSONRPC
+import           UnliftIO
+import           UnliftIO.Concurrent
 
 data Req = TimeReq | Ping deriving (Show, Eq)
 
@@ -47,29 +46,29 @@ instance ToJSON Res where
 handleResponse :: Maybe (Either ErrorObj Res) -> Res
 handleResponse t =
     case t of
-        Nothing -> error "could not receive or parse response"
-        Just (Left e) -> error $ fromError e
+        Nothing        -> error "could not receive or parse response"
+        Just (Left e)  -> error $ fromError e
         Just (Right r) -> r
 
-req :: MonadLoggerIO m => JsonRpcT m Res
+req :: MonadLoggerIO m => JSONRPCT m Res
 req = do
     tEM <- sendRequest TimeReq
     $(logDebug) "sending time request"
     return $ handleResponse tEM
 
-reqBatch :: MonadLoggerIO m => JsonRpcT m [Res]
+reqBatch :: MonadLoggerIO m => JSONRPCT m [Res]
 reqBatch = do
     $(logDebug) "sending pings"
     tEMs <- sendBatchRequest $ replicate 2 Ping
     return $ map handleResponse tEMs
 
 respond :: MonadLoggerIO m => Respond Req m Res
-respond TimeReq = liftM (Right . Time) $ liftIO getCurrentTime
+respond TimeReq = (Right . Time) <$> liftIO getCurrentTime
 respond Ping    = return $ Right Pong
 
 main :: IO ()
 main = runStderrLoggingT $
-    jsonRpcTcpClient V2 False (clientSettings 31337 "::1") $
+    jsonrpcTCPClient V2 False (clientSettings 31337 "::1") $
         withAsync responder $ const $ do
             $(logDebug) "sending four time requests one second apart"
             replicateM_ 4 $ do
@@ -78,7 +77,7 @@ main = runStderrLoggingT $
             $(logDebug) "sending two pings in a batch"
             reqBatch >>= $(logDebug) . T.pack . ("response: "++) . show
 
-responder :: MonadLoggerIO m => JsonRpcT m ()
+responder :: MonadLoggerIO m => JSONRPCT m ()
 responder = do
     $(logDebug) "listening for new request"
     qM <- receiveBatchRequest

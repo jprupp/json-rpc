@@ -1,14 +1,14 @@
-module Network.JsonRpc
+module Network.JSONRPC
 ( -- * Introduction
   -- $introduction
 
-  module Network.JsonRpc.Interface
-, module Network.JsonRpc.Data
+  module Network.JSONRPC.Interface
+, module Network.JSONRPC.Data
 ) where
 
-import Network.JsonRpc.Interface
-import Network.JsonRpc.Data
-import Network.JsonRpc.Arbitrary()
+import           Network.JSONRPC.Arbitrary ()
+import           Network.JSONRPC.Data
+import           Network.JSONRPC.Interface
 
 -- $introduction
 --

@@ -1,0 +1,64 @@
+name: json-rpc
+version: '0.8.0.0'
+synopsis: Fully-featured JSON-RPC 2.0 library
+description: 'Library compatible with JSON-RPC 2.0 and 1.0'
+category: Network
+author: Jean-Pierre Rupp
+maintainer: xenog@protonmail.com
+license: PublicDomain
+license-file: UNLICENSE
+github: xenog/json-rpc.git
+extra-source-files:
+- README.md
+dependencies:
+- base >=4.6 && <5
+- aeson
+- bytestring
+- conduit
+- conduit-extra
+- monad-logger
+- mtl
+- stm-conduit
+- text
+- time
+- unliftio
+- unordered-containers
+- vector
+- QuickCheck
+library:
+  source-dirs: src
+  ghc-options: -Wall
+  exposed-modules:
+  - Network.JSONRPC
+  dependencies:
+  - attoparsec
+  - deepseq
+  - hashable
+tests:
+  test-json-rpc:
+    main: Spec.hs
+    source-dirs: test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - json-rpc
+    - hspec
+executables:
+  concurrent-client:
+    main: examples/concurrent-client.hs
+    dependencies:
+    - json-rpc
+  concurrent-server:
+    main: examples/concurrent-server.hs
+    dependencies:
+    - json-rpc
+  time-client:
+    main: examples/time-client.hs
+    dependencies:
+    - json-rpc
+  time-server:
+    main: examples/time-server.hs
+    dependencies:
+    - json-rpc

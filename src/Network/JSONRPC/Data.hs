@@ -1,7 +1,7 @@
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveGeneric #-}
 -- | Implementation of basic JSON-RPC data types.
-module Network.JsonRpc.Data
+module Network.JSONRPC.Data
 ( -- * Requests
   Request(..)
 , BatchRequest(..)
@@ -40,39 +40,39 @@ module Network.JsonRpc.Data
 
 ) where
 
-import Control.Applicative
-import Data.ByteString (ByteString)
+import           Control.Applicative
+import           Control.DeepSeq
+import           Control.Monad
+import           Data.Aeson           (encode)
+import           Data.Aeson.Types
+import           Data.ByteString      (ByteString)
 import qualified Data.ByteString.Lazy as L
-import Control.DeepSeq
-import Control.Monad
-import Data.Aeson (encode)
-import Data.Aeson.Types
-import Data.Hashable (Hashable)
-import Data.Maybe
-import Data.Text (Text)
-import qualified Data.Text as T
-import Data.Text.Encoding
-import GHC.Generics (Generic)
+import           Data.Hashable        (Hashable)
+import           Data.Maybe
+import           Data.Text            (Text)
+import qualified Data.Text            as T
+import           Data.Text.Encoding
+import           GHC.Generics         (Generic)
 
 
 --
 -- Requests
 --
 
-data Request = Request { getReqVer      :: !Ver
-                       , getReqMethod   :: !Method
-                       , getReqParams   :: !Value
-                       , getReqId       :: !Id
+data Request = Request { getReqVer    :: !Ver
+                       , getReqMethod :: !Method
+                       , getReqParams :: !Value
+                       , getReqId     :: !Id
                        }
-             | Notif   { getReqVer      :: !Ver
-                       , getReqMethod   :: !Method
-                       , getReqParams   :: !Value
+             | Notif   { getReqVer    :: !Ver
+                       , getReqMethod :: !Method
+                       , getReqParams :: !Value
                        }
              deriving (Eq, Show, Generic)
 
 instance NFData Request where
     rnf (Request v m p i) = rnf v `seq` rnf m `seq` rnf p `seq` rnf i
-    rnf (Notif v m p) = rnf v `seq` rnf m `seq` rnf p
+    rnf (Notif v m p)     = rnf v `seq` rnf m `seq` rnf p
 
 instance ToJSON Request where
     toJSON (Request V2 m p i) = object $ case p of
@@ -165,12 +165,12 @@ data Response = Response      { getResVer :: !Ver
                               , getError  :: !ErrorObj
                               }
               deriving (Eq, Show, Generic)
-             
+
 
 instance NFData Response where
-    rnf (Response v r i) = rnf v `seq` rnf r `seq` rnf i
+    rnf (Response v r i)      = rnf v `seq` rnf r `seq` rnf i
     rnf (ResponseError v o i) = rnf v `seq` rnf o `seq` rnf i
-    rnf (OrphanError v o) = rnf v `seq` rnf o
+    rnf (OrphanError v o)     = rnf v `seq` rnf o
 
 instance ToJSON Response where
     toJSON (Response V1 r i) = object
@@ -194,7 +194,7 @@ class FromResponse r where
 -- | Parse a response knowing the method of the corresponding request.
 fromResponse :: FromResponse r => Method -> Response -> Maybe r
 fromResponse m (Response _ r _) = parseResult m >>= flip parseMaybe r
-fromResponse _ _ = Nothing
+fromResponse _ _                = Nothing
 
 instance FromResponse Value where
     parseResult = const $ Just return
@@ -252,7 +252,7 @@ data ErrorObj = ErrorObj  { getErrMsg  :: !String
 
 instance NFData ErrorObj where
     rnf (ErrorObj m c d) = rnf m `seq` rnf c `seq` rnf d
-    rnf (ErrorVal v) = rnf v
+    rnf (ErrorVal v)     = rnf v
 
 instance FromJSON ErrorObj where
     parseJSON Null = mzero
@@ -316,7 +316,7 @@ instance NFData BatchRequest where
 instance FromJSON BatchRequest where
     parseJSON qs@Array{} = BatchRequest  <$> parseJSON qs
     parseJSON q@Object{} = SingleRequest <$> parseJSON q
-    parseJSON _ = mzero
+    parseJSON _          = mzero
 
 instance ToJSON BatchRequest where
     toJSON (BatchRequest qs) = toJSON qs
@@ -334,7 +334,7 @@ instance NFData BatchResponse where
 instance FromJSON BatchResponse where
     parseJSON qs@Array{} = BatchResponse  <$> parseJSON qs
     parseJSON q@Object{} = SingleResponse <$> parseJSON q
-    parseJSON _ = mzero
+    parseJSON _          = mzero
 
 instance ToJSON BatchResponse where
     toJSON (BatchResponse qs) = toJSON qs
@@ -380,12 +380,12 @@ instance NFData Id where
 instance Enum Id where
     toEnum = IdInt
     fromEnum (IdInt i) = i
-    fromEnum _ = error "Can't enumerate non-integral ids"
+    fromEnum _         = error "Can't enumerate non-integral ids"
 
 instance FromJSON Id where
     parseJSON s@(String _) = IdTxt <$> parseJSON s
     parseJSON n@(Number _) = IdInt <$> parseJSON n
-    parseJSON _ = mzero
+    parseJSON _            = mzero
 
 instance ToJSON Id where
     toJSON (IdTxt s) = toJSON s

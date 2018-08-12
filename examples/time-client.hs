@@ -1,16 +1,16 @@
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
-import Control.Concurrent
-import Control.Monad
-import Control.Monad.Trans
-import Control.Monad.Logger
-import Data.Aeson
-import Data.Aeson.Types hiding (Error)
-import Data.Conduit.Network
-import qualified Data.Text as T
-import Data.Time.Clock
-import Data.Time.Format
-import Network.JsonRpc
+{-# LANGUAGE TemplateHaskell   #-}
+import           Control.Monad
+import           Control.Monad.Logger
+import           Control.Monad.Trans
+import           Data.Aeson
+import           Data.Aeson.Types     hiding (Error)
+import           Data.Conduit.Network
+import qualified Data.Text            as T
+import           Data.Time.Clock
+import           Data.Time.Format
+import           Network.JSONRPC
+import           UnliftIO.Concurrent
 
 data Req = TimeReq | Ping deriving (Show, Eq)
 
@@ -44,17 +44,17 @@ instance ToJSON Res where
 handleResponse :: Maybe (Either ErrorObj Res) -> Res
 handleResponse t =
     case t of
-        Nothing -> error "could not receive or parse response"
-        Just (Left e) -> error $ fromError e
+        Nothing        -> error "could not receive or parse response"
+        Just (Left e)  -> error $ fromError e
         Just (Right r) -> r
 
-req :: MonadLoggerIO m => JsonRpcT m Res
+req :: MonadLoggerIO m => JSONRPCT m Res
 req = do
     tEM <- sendRequest TimeReq
     $(logDebug) "sending time request"
     return $ handleResponse tEM
 
-reqBatch :: MonadLoggerIO m => JsonRpcT m [Res]
+reqBatch :: MonadLoggerIO m => JSONRPCT m [Res]
 reqBatch = do
     $(logDebug) "sending pings"
     tEMs <- sendBatchRequest $ replicate 2 Ping
@@ -62,7 +62,7 @@ reqBatch = do
 
 main :: IO ()
 main = runStderrLoggingT $
-    jsonRpcTcpClient V2 True (clientSettings 31337 "::1") $ do
+    jsonrpcTCPClient V2 True (clientSettings 31337 "::1") $ do
         $(logDebug) "sending two time requests one second apart"
         replicateM_ 2 $ do
             req >>= $(logDebug) . T.pack . ("response: "++) . show

@@ -1,19 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
-import Control.Concurrent
-import Control.Concurrent.Async.Lifted
-import Control.Monad
-import Control.Monad.Trans
-import Control.Monad.Logger
-import Data.Aeson.Types hiding (Error)
-import Data.Conduit.Network
-import qualified Data.Foldable as F
-import Data.Maybe
-import Data.Time.Clock
-import Data.Time.Format
-import qualified Data.Text as T
-import qualified Data.Vector as V
-import Network.JsonRpc
+{-# LANGUAGE TemplateHaskell   #-}
+import           Control.Monad
+import           Control.Monad.Logger
+import           Control.Monad.Trans
+import           Data.Aeson.Types     hiding (Error)
+import           Data.Conduit.Network
+import qualified Data.Foldable        as F
+import           Data.Maybe
+import qualified Data.Text            as T
+import           Data.Time.Clock
+import           Data.Time.Format
+import           Network.JSONRPC
+import           UnliftIO
+import           UnliftIO.Concurrent
 
 data Req = TimeReq | Ping deriving (Show, Eq)
 
@@ -45,15 +44,15 @@ instance ToJSON Res where
     toJSON Pong     = emptyArray
 
 respond :: MonadLoggerIO m => Respond Req m Res
-respond TimeReq = liftM (Right . Time) $ liftIO getCurrentTime
+respond TimeReq = (Right . Time) <$> liftIO getCurrentTime
 respond Ping    = return $ Right Pong
 
 main :: IO ()
 main = runStderrLoggingT $ do
     let ss = serverSettings 31337 "::1"
-    jsonRpcTcpServer V2 False ss $ withAsync pinger $ const srv
+    jsonrpcTCPServer V2 False ss $ withAsync pinger $ const srv
 
-srv :: MonadLoggerIO m => JsonRpcT m ()
+srv :: MonadLoggerIO m => JSONRPCT m ()
 srv = do
     $(logDebug) "listening for new request"
     qM <- receiveBatchRequest
@@ -72,7 +71,7 @@ srv = do
             sendBatchResponse $ BatchResponse rs
             srv
 
-pinger :: MonadLoggerIO m => JsonRpcT m ()
+pinger :: MonadLoggerIO m => JSONRPCT m ()
 pinger = do
     $(logDebug) "ping client"
     p <- sendRequest Ping
