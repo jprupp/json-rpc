@@ -2,10 +2,10 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: a02d2b107df6439cd518ee3c9bd65b181355abbe8d1c04d46fe6d0fdbe6045eb
+-- hash: 17ad40ec32205d9c35293e1ce27724ff52b373645c39da1d0d09976874e4d5e1
 
 name:           json-rpc
-version:        0.8.0.0
+version:        1.0.0
 synopsis:       Fully-featured JSON-RPC 2.0 library
 description:    Library compatible with JSON-RPC 2.0 and 1.0
 category:       Network
@@ -19,6 +19,7 @@ build-type:     Simple
 cabal-version:  >= 1.10
 
 extra-source-files:
+    CHANGELOG.md
     README.md
 
 source-repository head
