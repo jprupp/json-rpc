@@ -1,5 +1,5 @@
 name: json-rpc
-version: 1.0.0
+version: 1.0.1
 synopsis: Fully-featured JSON-RPC 2.0 library
 description: 'Library compatible with JSON-RPC 2.0 and 1.0'
 category: Network
