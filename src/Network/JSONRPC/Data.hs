@@ -220,7 +220,9 @@ parseVerIdResultError o = do
     v <- parseVer o
     i <- o .:? "id"
     r <- o .:? "result" .!= Null
-    p <- if r == Null then Left <$> o .: "error" else return $ Right r
+    p <- case v of
+          V1 -> if r == Null then Left <$> o .: "error" else return $ Right r
+          V2 -> maybe (Right r) Left <$> o .:? "error"
     return (v, i, p)
 
 -- | Create a response from a request. Use in servers.
