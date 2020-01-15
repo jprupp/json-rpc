@@ -4,10 +4,10 @@ synopsis: Fully-featured JSON-RPC 2.0 library
 description: 'Library compatible with JSON-RPC 2.0 and 1.0'
 category: Network
 author: Jean-Pierre Rupp
-maintainer: xenog@protonmail.com
+maintainer: jprupp@protonmail.ch
 license: PublicDomain
 license-file: UNLICENSE
-github: xenog/json-rpc.git
+github: jprupp/json-rpc.git
 extra-source-files:
 - README.md
 - CHANGELOG.md
