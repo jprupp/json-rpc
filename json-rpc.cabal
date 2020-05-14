@@ -1,0 +1,173 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.31.2.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 45c852a46c623d8b3e3e83117373ab0d9795f3e5e71b75aa3f0f1840d72c7d30
+
+name:           json-rpc
+version:        1.0.1
+synopsis:       Fully-featured JSON-RPC 2.0 library
+description:    Library compatible with JSON-RPC 2.0 and 1.0
+category:       Network
+homepage:       https://github.com/jprupp/json-rpc.git#readme
+bug-reports:    https://github.com/jprupp/json-rpc.git/issues
+author:         Jean-Pierre Rupp
+maintainer:     jprupp@protonmail.ch
+license:        PublicDomain
+license-file:   UNLICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    CHANGELOG.md
+
+source-repository head
+  type: git
+  location: https://github.com/jprupp/json-rpc.git
+
+library
+  exposed-modules:
+      Network.JSONRPC
+  other-modules:
+      Network.JSONRPC.Arbitrary
+      Network.JSONRPC.Data
+      Network.JSONRPC.Interface
+      Paths_json_rpc
+  hs-source-dirs:
+      src
+  ghc-options: -Wall
+  build-depends:
+      QuickCheck
+    , aeson
+    , attoparsec
+    , base >=4.6 && <5
+    , bytestring
+    , conduit
+    , conduit-extra
+    , deepseq
+    , hashable
+    , monad-logger
+    , mtl
+    , stm-conduit
+    , text
+    , time
+    , unliftio
+    , unordered-containers
+    , vector
+  default-language: Haskell2010
+
+executable concurrent-client
+  main-is: examples/concurrent-client.hs
+  other-modules:
+      Paths_json_rpc
+  build-depends:
+      QuickCheck
+    , aeson
+    , base >=4.6 && <5
+    , bytestring
+    , conduit
+    , conduit-extra
+    , json-rpc
+    , monad-logger
+    , mtl
+    , stm-conduit
+    , text
+    , time
+    , unliftio
+    , unordered-containers
+    , vector
+  default-language: Haskell2010
+
+executable concurrent-server
+  main-is: examples/concurrent-server.hs
+  other-modules:
+      Paths_json_rpc
+  build-depends:
+      QuickCheck
+    , aeson
+    , base >=4.6 && <5
+    , bytestring
+    , conduit
+    , conduit-extra
+    , json-rpc
+    , monad-logger
+    , mtl
+    , stm-conduit
+    , text
+    , time
+    , unliftio
+    , unordered-containers
+    , vector
+  default-language: Haskell2010
+
+executable time-client
+  main-is: examples/time-client.hs
+  other-modules:
+      Paths_json_rpc
+  build-depends:
+      QuickCheck
+    , aeson
+    , base >=4.6 && <5
+    , bytestring
+    , conduit
+    , conduit-extra
+    , json-rpc
+    , monad-logger
+    , mtl
+    , stm-conduit
+    , text
+    , time
+    , unliftio
+    , unordered-containers
+    , vector
+  default-language: Haskell2010
+
+executable time-server
+  main-is: examples/time-server.hs
+  other-modules:
+      Paths_json_rpc
+  build-depends:
+      QuickCheck
+    , aeson
+    , base >=4.6 && <5
+    , bytestring
+    , conduit
+    , conduit-extra
+    , json-rpc
+    , monad-logger
+    , mtl
+    , stm-conduit
+    , text
+    , time
+    , unliftio
+    , unordered-containers
+    , vector
+  default-language: Haskell2010
+
+test-suite test-json-rpc
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_json_rpc
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      QuickCheck
+    , aeson
+    , base >=4.6 && <5
+    , bytestring
+    , conduit
+    , conduit-extra
+    , hspec
+    , json-rpc
+    , monad-logger
+    , mtl
+    , stm-conduit
+    , text
+    , time
+    , unliftio
+    , unordered-containers
+    , vector
+  default-language: Haskell2010

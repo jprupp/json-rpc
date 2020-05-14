@@ -13,5 +13,4 @@ cabal.sandbox.config
 cabal.config
 .stack-work
 *~
-json-rpc.cabal
 dist-newstyle/
