@@ -98,9 +98,9 @@ decodeConduit ver = evalStateT loop Nothing where
     runParser ck = maybe (parse json ck) ($ ck) <$> get <* put Nothing
 
     handl True (Fail "" _ _) =
-        $(logDebug) "ignoring null string at end of incoming data"
+        $logDebugS "json-rpc" "ignoring null string at end of incoming data"
     handl b (Fail i _ _) = do
-        $(logError) "error parsing incoming message"
+        $logErrorS "json-rpc" "error parsing incoming message"
         lift . yield . Left $ OrphanError ver (errorParse i)
         unless b loop
     handl _ (Partial k) = put (Just k) >> loop
@@ -123,7 +123,7 @@ processIncoming =
                     Right v@Object {} -> do
                         single qs v
                         return $ do
-                            $(logDebug) "received message"
+                            $logDebugS "json-rpc" "received message"
                             processIncoming
                     Right v@(Array a) -> do
                         if V.null a
@@ -132,18 +132,18 @@ processIncoming =
                                 writeTBMChan (outCh qs) $ MsgResponse e
                             else batch qs (V.toList a)
                         return $ do
-                            $(logDebug) "received batch"
+                            $logDebugS "json-rpc" "received batch"
                             processIncoming
                     Right v -> do
                         let e = OrphanError (rpcVer qs) (errorInvalid v)
                         writeTBMChan (outCh qs) $ MsgResponse e
                         return $ do
-                            $(logWarn) "got invalid message"
+                            $logWarnS "json-rpc" "got invalid message"
                             processIncoming
                     Left e -> do
                         writeTBMChan (outCh qs) $ MsgResponse e
                         return $ do
-                            $(logWarn) "error parsing JSON"
+                            $logWarnS "json-rpc" "error parsing JSON"
                             processIncoming
   where
     flush qs = do
@@ -153,8 +153,8 @@ processIncoming =
         writeTVar (dead qs) True
         mapM_ ((`putTMVar` Nothing) . snd) $ M.toList m
         return $ do
-            $(logDebug) "session is now dead"
-            unless (M.null m) $ $(logError) "requests remained unfulfilled"
+            $logDebugS "json-rpc" "session is now dead"
+            unless (M.null m) $ $logErrorS "json-rpc" "requests remained unfulfilled"
     batch qs vs = do
         ts <- catMaybes <$> forM vs (process qs)
         unless (null ts) $
@@ -247,8 +247,8 @@ sendBatchRequest qs = do
             as  -> unless d $ writeTBMChan o $ MsgBatch $ map MsgRequest as
         return aps
     if null aps
-        then $(logDebug) "no responses pending"
-        else $(logDebug) "listening for responses if pending"
+        then $logDebugS "json-rpc" "no responses pending"
+        else $logDebugS "json-rpc" "listening for responses if pending"
     liftIO . atomically $ forM aps $ \(a, pM) ->
         case pM of
             Nothing -> return Nothing
@@ -284,10 +284,10 @@ receiveBatchRequest = do
     chM <- reader reqCh
     case chM of
         Just ch -> do
-            $(logDebug) "listening for a new request"
+            $logDebugS "json-rpc" "listening for a new request"
             liftIO . atomically $ readTBMChan ch
         Nothing -> do
-            $(logError) "ignoring requests from remote endpoint"
+            $logErrorS "json-rpc" "ignoring requests from remote endpoint"
             return Nothing
 
 -- | Send response message. Do not use to respond to a batch of requests.
