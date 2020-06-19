@@ -1,5 +1,5 @@
 name: json-rpc
-version: 1.0.2
+version: 1.0.3
 synopsis: Fully-featured JSON-RPC 2.0 library
 description: Please see the README on GitHub at <https://github.com/jprupp/json-rpc#readme>
 category: Network

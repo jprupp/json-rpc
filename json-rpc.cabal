@@ -4,12 +4,12 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: fa906567c9820e7b3dd72def851fbe59bf79196757efa257ad6d5a97280a3ec2
+-- hash: 77cd2980380a86ce6731e9afcae7c2ecc42257843e71231bcebaba6929bee5c8
 
 name:           json-rpc
-version:        1.0.2
+version:        1.0.3
 synopsis:       Fully-featured JSON-RPC 2.0 library
-description:    Library compatible with JSON-RPC 2.0 and 1.0
+description:    Please see the README on GitHub at <https://github.com/jprupp/json-rpc#readme>
 category:       Network
 homepage:       https://github.com/jprupp/json-rpc.git#readme
 bug-reports:    https://github.com/jprupp/json-rpc.git/issues
