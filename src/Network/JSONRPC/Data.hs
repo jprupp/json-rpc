@@ -78,15 +78,13 @@ instance ToJSON Request where
     toJSON (Request V2 m p i) = object $ case p of
         Null -> [jr2, "method" .= m, "id" .= i]
         _    -> [jr2, "method" .= m, "id" .= i, "params" .= p]
-    toJSON (Request V1 m p i) = object $ case p of
-        Null -> ["method" .= m, "params" .= emptyArray, "id" .= i]
-        _    -> ["method" .= m, "params" .= p, "id" .= i]
+    toJSON (Request V1 m p i) =
+        object ["method" .= m, "params" .= p, "id" .= i]
     toJSON (Notif V2 m p) = object $ case p of
         Null -> [jr2, "method" .= m]
         _    -> [jr2, "method" .= m, "params" .= p]
-    toJSON (Notif V1 m p) = object $ case p of
-        Null -> ["method" .= m, "params" .= emptyArray, "id" .= Null]
-        _    -> ["method" .= m, "params" .= p, "id" .= Null]
+    toJSON (Notif V1 m p) =
+      object ["method" .= m, "params" .= p, "id" .= Null]
 
 class FromRequest q where
     -- | Parser for params Value in JSON-RPC request.

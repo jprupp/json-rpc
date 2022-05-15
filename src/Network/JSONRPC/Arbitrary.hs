@@ -2,8 +2,6 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Network.JSONRPC.Arbitrary where
 
-import           Data.Aeson.Types
-import qualified Data.HashMap.Strict       as M
 import           Data.Text                 (Text)
 import qualified Data.Text                 as T
 import           Network.JSONRPC.Data
@@ -61,20 +59,4 @@ instance Arbitrary Message where
 
 instance Arbitrary Id where
     arbitrary = IdInt <$> arbitraryBoundedRandom
-
-instance Arbitrary Value where
-    arbitrary = resize 10 $ oneof [nonull, lsn, objn] where
-        nonull = oneof
-            [ toJSON <$> (arbitrary :: Gen String)
-            , toJSON <$> (arbitrary :: Gen Int)
-            , toJSON <$> (arbitrary :: Gen Double)
-            , toJSON <$> (arbitrary :: Gen Bool)
-            ]
-        val = oneof [ nonull, return Null ]
-        ls   = toJSON <$> listOf val
-        obj  = toJSON . M.fromList <$> listOf ps
-        ps   = (,) <$> (arbitrary :: Gen String) <*> oneof [val, ls]
-        lsn  = toJSON <$> listOf (oneof [ls, obj, val])
-        objn = toJSON . M.fromList <$> listOf psn
-        psn  = (,) <$> (arbitrary :: Gen String) <*> oneof [val, ls, obj]
 

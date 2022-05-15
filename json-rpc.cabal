@@ -1,13 +1,13 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.33.0.
+-- This file has been generated from package.yaml by hpack version 0.34.4.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 77cd2980380a86ce6731e9afcae7c2ecc42257843e71231bcebaba6929bee5c8
+-- hash: 4e2a99d4fdf85a19844c7bf16c14016bfd147baa005a628bebb4ea97823c379c
 
 name:           json-rpc
-version:        1.0.3
+version:        1.0.4
 synopsis:       Fully-featured JSON-RPC 2.0 library
 description:    Please see the README on GitHub at <https://github.com/jprupp/json-rpc#readme>
 category:       Network
@@ -39,7 +39,7 @@ library
   ghc-options: -Wall
   build-depends:
       QuickCheck
-    , aeson
+    , aeson >=2.0.3.0
     , attoparsec
     , base >=4.6 && <5
     , bytestring
@@ -63,7 +63,7 @@ executable concurrent-client
       Paths_json_rpc
   build-depends:
       QuickCheck
-    , aeson
+    , aeson >=2.0.3.0
     , base >=4.6 && <5
     , bytestring
     , conduit
@@ -85,7 +85,7 @@ executable concurrent-server
       Paths_json_rpc
   build-depends:
       QuickCheck
-    , aeson
+    , aeson >=2.0.3.0
     , base >=4.6 && <5
     , bytestring
     , conduit
@@ -107,7 +107,7 @@ executable time-client
       Paths_json_rpc
   build-depends:
       QuickCheck
-    , aeson
+    , aeson >=2.0.3.0
     , base >=4.6 && <5
     , bytestring
     , conduit
@@ -129,7 +129,7 @@ executable time-server
       Paths_json_rpc
   build-depends:
       QuickCheck
-    , aeson
+    , aeson >=2.0.3.0
     , base >=4.6 && <5
     , bytestring
     , conduit
@@ -155,7 +155,7 @@ test-suite test-json-rpc
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       QuickCheck
-    , aeson
+    , aeson >=2.0.3.0
     , base >=4.6 && <5
     , bytestring
     , conduit
