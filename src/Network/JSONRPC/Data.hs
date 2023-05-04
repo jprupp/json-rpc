@@ -95,9 +95,9 @@ fromRequest req =
     case parserM of
         Nothing -> Left $ errorMethod m
         Just parser ->
-            case parseMaybe parser p of
-                Nothing -> Left $ errorParams p
-                Just  q -> Right q
+            case parseEither parser p of
+                Left e  -> Left $ errorParams p e
+                Right q -> Right q
   where
     m = getReqMethod req
     p = getReqParams req
@@ -288,8 +288,8 @@ errorInvalid :: Value -> ErrorObj
 errorInvalid = ErrorObj "Invalid request" (-32600)
 
 -- | Invalid params.
-errorParams :: Value -> ErrorObj
-errorParams = ErrorObj "Invalid params" (-32602)
+errorParams :: Value -> String -> ErrorObj
+errorParams v e = ErrorObj ("Invalid params: " ++ e) (-32602) v
 
 -- | Method not found.
 errorMethod :: Method -> ErrorObj
