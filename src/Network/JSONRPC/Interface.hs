@@ -40,6 +40,7 @@ import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Control.Monad.State
 import           Data.Aeson
+import           Data.Aeson.Parser
 import           Data.Aeson.Types           (parseMaybe)
 import           Data.Attoparsec.ByteString
 import           Data.ByteString            (ByteString)

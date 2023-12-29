@@ -1,5 +1,5 @@
 name: json-rpc
-version: 1.0.4
+version: 1.1.0
 synopsis: Fully-featured JSON-RPC 2.0 library
 description: Please see the README on GitHub at <https://github.com/jprupp/json-rpc#readme>
 category: Network
@@ -13,7 +13,8 @@ extra-source-files:
 - CHANGELOG.md
 dependencies:
 - base >=4.6 && <5
-- aeson >= 2.0.3.0
+- aeson >= 2.2
+- attoparsec-aeson
 - bytestring
 - conduit
 - conduit-extra

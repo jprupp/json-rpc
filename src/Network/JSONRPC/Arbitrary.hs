@@ -2,6 +2,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Network.JSONRPC.Arbitrary where
 
+import           Data.Aeson
 import           Data.Text                 (Text)
 import qualified Data.Text                 as T
 import           Network.JSONRPC.Data
@@ -22,10 +23,12 @@ instance Arbitrary Request where
 
 instance Arbitrary Response where
     arbitrary = oneof
-        [ Response <$> arbitrary <*> arbitrary <*> arbitrary
+        [ Response <$> arbitrary <*> res <*> arbitrary
         , ResponseError <$> arbitrary <*> arbitrary <*> arbitrary
         , OrphanError <$> arbitrary <*> arbitrary
         ]
+      where
+        res = arbitrary `suchThat` (/= Null)
 
 
 instance Arbitrary ErrorObj where
