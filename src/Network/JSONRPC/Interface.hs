@@ -326,7 +326,7 @@ runJSONRPCT ver ignore snk src f = do
     qs <- liftIO . atomically $ initSession ver ignore
     let inSnk  = sinkTBMChan (inCh qs)
         outSrc = sourceTBMChan (outCh qs)
-    withAsync (runConduit $ src .| decodeConduit ver .| inSnk) $ const $
+    withAsync ((runConduit $ src .| decodeConduit ver .| inSnk) >> liftIO (atomically $ closeTBMChan $ inCh qs)) $ const $
         withAsync (runConduit $ outSrc .| encodeConduit .| snk) $ \o ->
             withAsync (runReaderT processIncoming qs) $ const $ do
                 a <- runReaderT f qs
