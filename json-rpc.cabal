@@ -4,10 +4,10 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: e0d0e4a6940f7d7d8752f6f8bc7749d96342dbc95525d41d2e9d23fddfa5bcf7
+-- hash: 0206b1a45ad29041be2d398ab0fc65ed5547443e7527e91e1af6cde940c89694
 
 name:           json-rpc
-version:        1.1.0
+version:        1.1.1
 synopsis:       Fully-featured JSON-RPC 2.0 library
 description:    Please see the README on GitHub at <https://github.com/jprupp/json-rpc#readme>
 category:       Network
@@ -39,7 +39,7 @@ library
   ghc-options: -Wall
   build-depends:
       QuickCheck
-    , aeson >=2.2
+    , aeson
     , attoparsec
     , attoparsec-aeson
     , base >=4.6 && <5
@@ -64,7 +64,7 @@ executable concurrent-client
       Paths_json_rpc
   build-depends:
       QuickCheck
-    , aeson >=2.2
+    , aeson
     , attoparsec-aeson
     , base >=4.6 && <5
     , bytestring
@@ -87,7 +87,7 @@ executable concurrent-server
       Paths_json_rpc
   build-depends:
       QuickCheck
-    , aeson >=2.2
+    , aeson
     , attoparsec-aeson
     , base >=4.6 && <5
     , bytestring
@@ -110,7 +110,7 @@ executable time-client
       Paths_json_rpc
   build-depends:
       QuickCheck
-    , aeson >=2.2
+    , aeson
     , attoparsec-aeson
     , base >=4.6 && <5
     , bytestring
@@ -133,7 +133,7 @@ executable time-server
       Paths_json_rpc
   build-depends:
       QuickCheck
-    , aeson >=2.2
+    , aeson
     , attoparsec-aeson
     , base >=4.6 && <5
     , bytestring
@@ -160,7 +160,7 @@ test-suite test-json-rpc
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       QuickCheck
-    , aeson >=2.2
+    , aeson
     , attoparsec-aeson
     , base >=4.6 && <5
     , bytestring
