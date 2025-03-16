@@ -34,7 +34,7 @@ instance Arbitrary Response where
 instance Arbitrary ErrorObj where
     arbitrary = oneof
         [ ErrorObj <$> arbitrary <*> arbitrary <*> arbitrary
-        , ErrorVal <$> arbitrary
+        , ErrorVal <$> arbitrary `suchThat` (/= Null)
         ]
 
 instance Arbitrary BatchRequest where
