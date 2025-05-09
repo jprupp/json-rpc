@@ -1,19 +1,19 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.36.0.
+-- This file has been generated from package.yaml by hpack version 0.38.0.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0206b1a45ad29041be2d398ab0fc65ed5547443e7527e91e1af6cde940c89694
+-- hash: af79897f0e82fbeacd851e9b286216ab406df7508ea4e6c07e7ced0f24912c64
 
 name:           json-rpc
-version:        1.1.1
+version:        1.1.2
 synopsis:       Fully-featured JSON-RPC 2.0 library
 description:    Please see the README on GitHub at <https://github.com/jprupp/json-rpc#readme>
 category:       Network
 homepage:       https://github.com/jprupp/json-rpc.git#readme
 bug-reports:    https://github.com/jprupp/json-rpc.git/issues
-author:         Jean-Pierre Rupp
+author:         JP Rupp
 maintainer:     jprupp@protonmail.ch
 license:        MIT
 license-file:   LICENSE

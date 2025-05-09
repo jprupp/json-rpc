@@ -1,9 +1,9 @@
 name: json-rpc
-version: 1.1.1
+version: 1.1.2
 synopsis: Fully-featured JSON-RPC 2.0 library
 description: Please see the README on GitHub at <https://github.com/jprupp/json-rpc#readme>
 category: Network
-author: Jean-Pierre Rupp
+author: JP Rupp
 maintainer: jprupp@protonmail.ch
 license: MIT
 license-file: LICENSE
