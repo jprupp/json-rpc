@@ -216,7 +216,9 @@ processIncoming =
 -- by server if any. Just Right means response was received just right.
 sendRequest :: (MonadLoggerIO m , ToJSON q, ToRequest q, FromResponse r)
             => q -> JSONRPCT m (Maybe (Either ErrorObj r))
-sendRequest q = head `liftM` sendBatchRequest [q]
+sendRequest q = sendBatchRequest [q] >>= \case
+  [] -> return Nothing
+  x:_ -> return x
 
 -- | Send multiple requests in a batch. If only a single request, do not
 -- put it in a batch.

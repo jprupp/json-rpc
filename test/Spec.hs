@@ -115,7 +115,9 @@ checkFieldsReqNotif
 checkFieldsReqNotif ver m v i o = do
     checkVerId ver i o >>= guard
     o .: "method" >>= guard . (==m)
-    o .: "params" >>= guard . (==v)
+    o .:? "params" >>= \case
+      Just v' -> guard (v' == v)
+      Nothing -> guard (v == Null)
     return True
 
 checkFieldsReq :: Request -> Object -> Parser Bool
